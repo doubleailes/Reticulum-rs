@@ -491,12 +491,9 @@ async fn handle_proof<'a>(packet: &Packet, mut handler: MutexGuard<'a, Transport
 
     for link in handler.out_links.values() {
         let mut link = link.lock().await;
-        match link.handle_packet(packet) {
-            LinkHandleResult::Activated => {
-                let rtt_packet = link.create_rtt();
-                handler.send_packet(rtt_packet).await;
-            }
-            _ => {}
+        if let LinkHandleResult::Activated = link.handle_packet(packet) {
+            let rtt_packet = link.create_rtt();
+            handler.send_packet(rtt_packet).await;
         }
     }
 
@@ -562,12 +559,8 @@ async fn handle_data<'a>(packet: &Packet, handler: MutexGuard<'a, TransportHandl
         if let Some(link) = handler.in_links.get(&packet.destination).cloned() {
             let mut link = link.lock().await;
             let result = link.handle_packet(packet);
-            match result {
-                LinkHandleResult::KeepAlive => {
-                    let packet = link.keep_alive_packet(KEEP_ALIVE_RESPONSE);
-                    handler.send_packet(packet).await;
-                }
-                _ => {}
+            if let LinkHandleResult::KeepAlive = result {
+                handler.send_packet(link.keep_alive_packet(0xFE)).await;
             }
         }
 
@@ -594,8 +587,8 @@ async fn handle_data<'a>(packet: &Packet, handler: MutexGuard<'a, TransportHandl
         }
     }
 
-    if packet.header.destination_type == DestinationType::Single {
-        if let Some(_destination) = handler
+    if packet.header.destination_type == DestinationType::Single
+        && let Some(_destination) = handler
             .single_in_destinations
             .get(&packet.destination)
             .cloned()
@@ -609,7 +602,6 @@ async fn handle_data<'a>(packet: &Packet, handler: MutexGuard<'a, TransportHandl
         } else {
             data_handled = send_to_next_hop(packet, &handler, None).await;
         }
-    }
 
     if data_handled {
         log::trace!(
@@ -690,7 +682,7 @@ async fn handle_announce<'a>(
 
         let _ = handler.announce_tx.send(AnnounceEvent {
             destination,
-            app_data: PacketDataBuffer::new_from_slice(&app_data),
+            app_data: PacketDataBuffer::new_from_slice(app_data),
         });
     }
 }
@@ -810,7 +802,7 @@ async fn handle_check_links<'a>(mut handler: MutexGuard<'a, TransportHandler>) {
     }
 
     for addr in &links_to_remove {
-        handler.in_links.remove(&addr);
+        handler.in_links.remove(addr);
     }
 
     links_to_remove.clear();
@@ -824,7 +816,7 @@ async fn handle_check_links<'a>(mut handler: MutexGuard<'a, TransportHandler>) {
     }
 
     for addr in &links_to_remove {
-        handler.out_links.remove(&addr);
+        handler.out_links.remove(addr);
     }
 
     for link_entry in &handler.out_links {
@@ -834,8 +826,8 @@ async fn handle_check_links<'a>(mut handler: MutexGuard<'a, TransportHandler>) {
             link.restart();
         }
 
-        if link.status() == LinkStatus::Pending {
-            if link.elapsed() > INTERVAL_OUTPUT_LINK_REPEAT {
+        if link.status() == LinkStatus::Pending
+            && link.elapsed() > INTERVAL_OUTPUT_LINK_REPEAT {
                 log::warn!(
                     "tp({}): repeat link request {}",
                     handler.config.name,
@@ -843,7 +835,6 @@ async fn handle_check_links<'a>(mut handler: MutexGuard<'a, TransportHandler>) {
                 );
                 handler.send_packet(link.request()).await;
             }
-        }
     }
 }
 
