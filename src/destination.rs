@@ -1,22 +1,28 @@
 pub mod link;
 pub mod link_map;
+pub mod ratchet;
 
-use ed25519_dalek::{Signature, SigningKey, VerifyingKey, SIGNATURE_LENGTH};
+use ed25519_dalek::{SIGNATURE_LENGTH, Signature, SigningKey, VerifyingKey};
 use rand_core::CryptoRngCore;
 use x25519_dalek::PublicKey;
 
 use core::{fmt, marker::PhantomData};
 
+use self::ratchet::RatchetManager;
 use crate::{
     error::RnsError,
     hash::{AddressHash, Hash},
-    identity::{EmptyIdentity, HashIdentity, Identity, PrivateIdentity, PUBLIC_KEY_LENGTH},
+    identity::{
+        DecryptIdentity, EmptyIdentity, EncryptIdentity, HashIdentity, Identity, PUBLIC_KEY_LENGTH,
+        PrivateIdentity,
+    },
     packet::{
-        self, DestinationType, Header, HeaderType, IfacFlag, Packet, PacketContext,
+        self, DestinationType, Header, HeaderType, IfacFlag, PACKET_MDU, Packet, PacketContext,
         PacketDataBuffer, PacketType, PropagationType,
     },
 };
 use sha2::Digest;
+use std::{path::PathBuf, sync::Arc};
 
 //***************************************************************************//
 
@@ -307,6 +313,195 @@ impl Destination<PrivateIdentity, Input, Single> {
 
     pub fn sign_key(&self) -> &SigningKey {
         self.identity.sign_key()
+    }
+}
+
+/// A destination with ratchet support for automatic key rotation
+pub struct RatchetedDestination {
+    pub destination: SingleInputDestination,
+    pub ratchet_manager: Arc<RatchetManager>,
+}
+
+impl RatchetedDestination {
+    /// Create a new ratcheted destination
+    pub fn new(identity: PrivateIdentity, name: DestinationName) -> Self {
+        let destination = SingleInputDestination::new(identity, name);
+        let ratchet_manager = Arc::new(RatchetManager::new());
+
+        Self {
+            destination,
+            ratchet_manager,
+        }
+    }
+
+    /// Enable ratchets for this destination with a file path for key storage
+    pub fn enable_ratchets<R: CryptoRngCore + Copy>(
+        &self,
+        rng: R,
+        ratchet_file_path: PathBuf,
+    ) -> Result<(), RnsError> {
+        self.ratchet_manager.enable_ratchets(
+            rng,
+            self.destination.desc.address_hash,
+            ratchet_file_path,
+        )
+    }
+
+    /// Announce with automatic ratchet key rotation
+    /// 
+    /// Sends an announce packet first, then rotates the ratchet key if ratchets are enabled.
+    /// This matches the Python RNS behavior where key rotation happens after announce transmission.
+    pub fn announce<R: CryptoRngCore + Copy>(
+        &self,
+        rng: R,
+        app_data: Option<&[u8]>,
+    ) -> Result<Packet, RnsError> {
+        // Send the announce packet first (matching Python RNS behavior)
+        let packet = self.destination.announce(rng, app_data)?;
+        
+        // Then rotate the ratchet key if ratchets are enabled
+        if self
+            .ratchet_manager
+            .is_enabled(self.destination.desc.address_hash)
+        {
+            self.ratchet_manager
+                .rotate_ratchet(rng, self.destination.desc.address_hash)?;
+        }
+
+        Ok(packet)
+    }
+
+    /// Check if ratchets are enabled for this destination
+    pub fn ratchets_enabled(&self) -> bool {
+        self.ratchet_manager
+            .is_enabled(self.destination.desc.address_hash)
+    }
+
+    /// Get the current encryption key (for ratcheted encryption)
+    pub fn current_encryption_key(&self) -> Option<crate::identity::DerivedKey> {
+        self.ratchet_manager
+            .get_encryption_key(self.destination.desc.address_hash)
+    }
+
+    /// Get keys for decryption attempts (current + old keys)
+    pub fn decryption_keys(&self) -> Vec<crate::identity::DerivedKey> {
+        self.ratchet_manager
+            .get_decryption_keys(self.destination.desc.address_hash)
+    }
+
+    /// Handle an incoming packet with ratchet-aware decryption
+    pub fn handle_packet(&mut self, packet: &Packet) -> DestinationHandleStatus {
+        // Forward to the underlying destination for basic handling
+        self.destination.handle_packet(packet)
+    }
+
+    /// Get the destination hash
+    pub fn destination_hash(&self) -> AddressHash {
+        self.destination.desc.address_hash
+    }
+
+    /// Get the destination description
+    pub fn desc(&self) -> &DestinationDesc {
+        &self.destination.desc
+    }
+
+    /// Get the signing key
+    pub fn sign_key(&self) -> &SigningKey {
+        self.destination.sign_key()
+    }
+
+    /// Encrypt data using current ratchet key (if ratchets enabled) or normal encryption
+    pub fn encrypt<'a, R: CryptoRngCore + Copy>(
+        &self,
+        rng: R,
+        text: &[u8],
+        out_buf: &'a mut [u8],
+    ) -> Result<&'a [u8], RnsError> {
+        if let Some(ratchet_key) = self.current_encryption_key() {
+            // Use ratchet encryption
+            self.destination
+                .identity
+                .encrypt(rng, text, &ratchet_key, out_buf)
+        } else {
+            // Fallback to normal encryption using ephemeral key
+            let derived_key = self
+                .destination
+                .identity
+                .as_identity()
+                .derive_key(rng, None);
+            self.destination
+                .identity
+                .encrypt(rng, text, &derived_key, out_buf)
+        }
+    }
+
+    /// Decrypt data using ratchet keys (if ratchets enabled) or normal decryption
+    pub fn decrypt<'a, R: CryptoRngCore + Copy>(
+        &self,
+        rng: R,
+        data: &[u8],
+        out_buf: &'a mut [u8],
+    ) -> Result<&'a [u8], RnsError> {
+        if self.ratchets_enabled() {
+            // Try decryption with all ratchet keys (current and old)
+            let keys = self.decryption_keys();
+
+            for key in keys {
+                // Use a fresh buffer slice for each attempt to avoid borrowing issues
+                match self
+                    .destination
+                    .identity
+                    .decrypt(rng, data, &key, &mut out_buf[..])
+                {
+                    Ok(result) => {
+                        // Copy result to the original buffer and return the proper slice
+                        let result_len = result.len();
+                        return Ok(&out_buf[..result_len]);
+                    }
+                    Err(_) => continue,
+                }
+            }
+
+            Err(RnsError::CryptoError)
+        } else {
+            // Fallback to normal decryption using ephemeral key
+            let derived_key = self
+                .destination
+                .identity
+                .as_identity()
+                .derive_key(rng, None);
+            self.destination
+                .identity
+                .decrypt(rng, data, &derived_key, out_buf)
+        }
+    }
+
+    /// Create a data packet with ratchet encryption
+    pub fn create_data_packet<R: CryptoRngCore + Copy>(
+        &self,
+        rng: R,
+        data: &[u8],
+    ) -> Result<Packet, RnsError> {
+        // Encrypt the data
+        let mut encrypted_buf = [0u8; PACKET_MDU];
+        let encrypted_data = self.encrypt(rng, data, &mut encrypted_buf)?;
+
+        // Create packet with encrypted data
+        let mut packet_data = PacketDataBuffer::new();
+        packet_data.write(encrypted_data)?;
+
+        Ok(Packet {
+            header: Header {
+                destination_type: DestinationType::Single,
+                packet_type: PacketType::Data,
+                ..Default::default()
+            },
+            ifac: None,
+            destination: self.destination.desc.address_hash,
+            transport: None,
+            context: PacketContext::None,
+            data: packet_data,
+        })
     }
 }
 

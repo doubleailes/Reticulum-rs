@@ -7,21 +7,21 @@ use std::time::Duration;
 use tokio::time;
 use tokio_util::sync::CancellationToken;
 
-use tokio::sync::broadcast;
 use tokio::sync::Mutex;
 use tokio::sync::MutexGuard;
+use tokio::sync::broadcast;
 
-use crate::destination::link::Link;
-use crate::destination::link::LinkEventData;
-use crate::destination::link::LinkHandleResult;
-use crate::destination::link::LinkId;
-use crate::destination::link::LinkStatus;
 use crate::destination::DestinationAnnounce;
 use crate::destination::DestinationDesc;
 use crate::destination::DestinationHandleStatus;
 use crate::destination::DestinationName;
 use crate::destination::SingleInputDestination;
 use crate::destination::SingleOutputDestination;
+use crate::destination::link::Link;
+use crate::destination::link::LinkEventData;
+use crate::destination::link::LinkHandleResult;
+use crate::destination::link::LinkId;
+use crate::destination::link::LinkStatus;
 
 use crate::hash::AddressHash;
 use crate::identity::PrivateIdentity;
@@ -440,11 +440,11 @@ async fn handle_data<'a>(packet: &Packet, handler: MutexGuard<'a, TransportHandl
             .single_in_destinations
             .get(&packet.destination)
             .cloned()
-        {
-            data_handled = true;
+    {
+        data_handled = true;
 
-            // todo
-        }
+        // todo
+    }
 
     if data_handled {
         log::trace!(
@@ -573,15 +573,14 @@ async fn handle_check_links<'a>(mut handler: MutexGuard<'a, TransportHandler>) {
             link.restart();
         }
 
-        if link.status() == LinkStatus::Pending
-            && link.elapsed() > INTERVAL_OUTPUT_LINK_REPEAT {
-                log::warn!(
-                    "tp({}): repeat link request {}",
-                    handler.config.name,
-                    link.id()
-                );
-                handler.send_packet(link.request()).await;
-            }
+        if link.status() == LinkStatus::Pending && link.elapsed() > INTERVAL_OUTPUT_LINK_REPEAT {
+            log::warn!(
+                "tp({}): repeat link request {}",
+                handler.config.name,
+                link.id()
+            );
+            handler.send_packet(link.request()).await;
+        }
     }
 }
 

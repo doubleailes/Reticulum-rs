@@ -179,7 +179,6 @@ impl Default for Header {
 
 impl Header {
     pub fn to_meta(&self) -> u8 {
-        
         (self.ifac_flag as u8) << 7
             | (self.header_type as u8) << 6
             | (self.propagation_type as u8) << 4
