@@ -148,8 +148,6 @@ impl InterfaceManager {
 
         let inner = Arc::new(Mutex::new(inner));
 
-        
-
         InterfaceContext::<T> {
             inner: inner.clone(),
             channel,
@@ -189,7 +187,7 @@ impl InterfaceManager {
                     }
 
                     should_send
-                },
+                }
                 TxMessageType::Direct(address) => address == iface.address,
             };
 
