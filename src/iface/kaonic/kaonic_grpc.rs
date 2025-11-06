@@ -5,11 +5,11 @@ pub mod proto {
 use std::sync::Arc;
 use std::time::Duration;
 
+use proto::RadioFrame;
 use proto::device_client::DeviceClient;
 use proto::radio_client::RadioClient;
-use proto::RadioFrame;
-use tokio::sync::mpsc::Receiver;
 use tokio::sync::Mutex;
+use tokio::sync::mpsc::Receiver;
 use tokio_stream::StreamExt;
 use tokio_util::sync::CancellationToken;
 use tonic::transport::Channel;

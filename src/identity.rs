@@ -2,7 +2,7 @@ use alloc::fmt::Write;
 use hkdf::Hkdf;
 use rand_core::CryptoRngCore;
 
-use ed25519_dalek::{ed25519::signature::Signer, Signature, SigningKey, VerifyingKey};
+use ed25519_dalek::{Signature, SigningKey, VerifyingKey, ed25519::signature::Signer};
 use sha2::{Digest, Sha256};
 use x25519_dalek::{EphemeralSecret, PublicKey, SharedSecret, StaticSecret};
 
@@ -439,6 +439,10 @@ impl DerivedKey {
 
     pub fn as_slice(&self) -> &[u8] {
         &self.key[..]
+    }
+
+    pub fn new_from_bytes(bytes: &[u8; DERIVED_KEY_LENGTH]) -> Self {
+        Self { key: *bytes }
     }
 }
 

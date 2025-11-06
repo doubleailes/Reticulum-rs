@@ -45,6 +45,8 @@ tokio-util = "0.7.15"
 
 rmp = "0.8.14"
 serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0"
+hex = "0.4"
 
 # Logging
 log = "0.4.27"
@@ -89,3 +91,7 @@ path = "examples/kaonic_tcp_mesh.rs"
 [[example]]
 name = "kaonic_mesh"
 path = "examples/kaonic_mesh.rs"
+
+[[example]]
+name = "ratchet_echo"
+path = "examples/ratchet_echo.rs"

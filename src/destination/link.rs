@@ -3,7 +3,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use ed25519_dalek::{Signature, SigningKey, PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH};
+use ed25519_dalek::{PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH, Signature, SigningKey};
 use rand_core::OsRng;
 use sha2::Digest;
 use x25519_dalek::StaticSecret;
@@ -11,10 +11,10 @@ use x25519_dalek::StaticSecret;
 use crate::{
     buffer::OutputBuffer,
     error::RnsError,
-    hash::{AddressHash, Hash, ADDRESS_HASH_SIZE},
+    hash::{ADDRESS_HASH_SIZE, AddressHash, Hash},
     identity::{DecryptIdentity, DerivedKey, EncryptIdentity, Identity, PrivateIdentity},
     packet::{
-        DestinationType, Header, Packet, PacketContext, PacketDataBuffer, PacketType, PACKET_MDU,
+        DestinationType, Header, PACKET_MDU, Packet, PacketContext, PacketDataBuffer, PacketType,
     },
 };
 
@@ -239,8 +239,6 @@ impl Link {
         packet_data.reset();
         packet_data.safe_write(&signature.to_bytes()[..]);
         packet_data.safe_write(self.priv_identity.as_identity().public_key.as_bytes());
-
-        
 
         Packet {
             header: Header {
