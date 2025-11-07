@@ -331,9 +331,9 @@ impl RatchetedDestination {
     ) -> Result<Self, RnsError> {
         let destination = SingleInputDestination::new(identity, name);
         
-        // Create ratchet state for this destination
-        let destination_hash = destination.desc.address_hash.as_slice().try_into()
-            .map_err(|_| RnsError::InvalidHash)?;
+        // Create ratchet state for this destination - convert AddressHash to [u8; 16]
+        let mut destination_hash = [0u8; 16];
+        destination_hash.copy_from_slice(destination.desc.address_hash.as_slice());
             
         let ratchet_state = ratchet::RatchetState::new(
             destination_hash,

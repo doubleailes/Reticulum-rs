@@ -86,7 +86,7 @@ impl RatchetKey {
 #[derive(Debug)]
 pub struct RatchetState {
     ratchets: Arc<RwLock<Vec<RatchetKey>>>,
-    destination_hash: [u8; 32],
+    destination_hash: [u8; 16], // AddressHash is 16 bytes
     storage_path: Option<PathBuf>,
     identity: Arc<Identity>,
 }
@@ -94,14 +94,14 @@ pub struct RatchetState {
 impl RatchetState {
     /// Load ratchet state from storage (Python RNS compatible)
     pub fn load(
-        destination_hash: [u8; 32], 
+        destination_hash: [u8; 16], 
         storage_dir: Option<PathBuf>,
         identity: Arc<Identity>
     ) -> RnsResult<Self> {
         let storage_path = storage_dir.map(|dir| {
             dir.join(format!(
                 "ratchets_{}",
-                hex::encode(&destination_hash[..16])
+                hex::encode(&destination_hash)
             ))
         });
 
@@ -123,14 +123,14 @@ impl RatchetState {
 
     /// Create a new ratchet state  
     pub fn new(
-        destination_hash: [u8; 32],
+        destination_hash: [u8; 16],
         storage_dir: Option<PathBuf>, 
         identity: Arc<Identity>
     ) -> RnsResult<Self> {
         let storage_path = storage_dir.map(|dir| {
             dir.join(format!(
                 "ratchets_{}",
-                hex::encode(&destination_hash[..16])
+                hex::encode(&destination_hash)
             ))
         });
 
@@ -144,11 +144,25 @@ impl RatchetState {
         Ok(state)
     }
 
-    /// Load ratchets from file (simplified MessagePack format)
-    fn load_ratchets(_path: &PathBuf, _identity: &Identity) -> RnsResult<Vec<RatchetKey>> {
-        // TODO: Implement file loading with MessagePack
-        // For now, return empty vector - will be filled on first use
-        Ok(Vec::new())
+    /// Load ratchets from file (MessagePack format)
+    fn load_ratchets(path: &PathBuf, _identity: &Identity) -> RnsResult<Vec<RatchetKey>> {
+        use std::fs::File;
+        use std::io::Read;
+        
+        // Open and lock file for reading
+        let mut file = File::open(path)?;
+        file.lock_shared()?;
+        
+        let mut contents = Vec::new();
+        file.read_to_end(&mut contents)?;
+        file.unlock()?;
+
+        // Deserialize ratchets directly from MessagePack
+        // Note: For full Python RNS compatibility, we would add signature verification here
+        let ratchets: Vec<RatchetKey> = rmp_serde::from_slice(&contents)
+            .map_err(|e| RnsError::from(e.to_string()))?;
+
+        Ok(ratchets)
     }
 
     /// Save ratchets to file (simplified MessagePack format)
