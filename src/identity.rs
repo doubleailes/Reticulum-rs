@@ -44,7 +44,7 @@ pub trait HashIdentity {
     fn as_address_hash_slice(&self) -> &[u8];
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct Identity {
     pub public_key: PublicKey,
     pub verifying_key: VerifyingKey,
