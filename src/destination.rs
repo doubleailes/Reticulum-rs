@@ -324,32 +324,34 @@ pub struct RatchetedDestination {
 
 impl RatchetedDestination {
     /// Create a new ratcheted destination
-    pub fn new(identity: PrivateIdentity, name: DestinationName) -> Self {
+    pub fn new(
+        identity: PrivateIdentity, 
+        name: DestinationName,
+        storage_dir: Option<PathBuf>
+    ) -> Result<Self, RnsError> {
         let destination = SingleInputDestination::new(identity, name);
-        let ratchet_manager = Arc::new(RatchetManager::new());
+        
+        // Create ratchet state for this destination
+        let destination_hash = destination.desc.address_hash.as_slice().try_into()
+            .map_err(|_| RnsError::InvalidHash)?;
+            
+        let ratchet_state = ratchet::RatchetState::new(
+            destination_hash,
+            storage_dir,
+            Arc::new(destination.identity.as_identity().clone())
+        )?;
+        
+        let ratchet_manager = Arc::new(RatchetManager::new(ratchet_state));
 
-        Self {
+        Ok(Self {
             destination,
             ratchet_manager,
-        }
-    }
-
-    /// Enable ratchets for this destination with a file path for key storage
-    pub fn enable_ratchets<R: CryptoRngCore + Copy>(
-        &self,
-        rng: R,
-        ratchet_file_path: PathBuf,
-    ) -> Result<(), RnsError> {
-        self.ratchet_manager.enable_ratchets(
-            rng,
-            self.destination.desc.address_hash,
-            ratchet_file_path,
-        )
+        })
     }
 
     /// Announce with automatic ratchet key rotation
     /// 
-    /// Sends an announce packet first, then rotates the ratchet key if ratchets are enabled.
+    /// Sends an announce packet first, then rotates the ratchet key.
     /// This matches the Python RNS behavior where key rotation happens after announce transmission.
     pub fn announce<R: CryptoRngCore + Copy>(
         &self,
@@ -359,34 +361,25 @@ impl RatchetedDestination {
         // Send the announce packet first (matching Python RNS behavior)
         let packet = self.destination.announce(rng, app_data)?;
         
-        // Then rotate the ratchet key if ratchets are enabled
-        if self
-            .ratchet_manager
-            .is_enabled(self.destination.desc.address_hash)
-        {
-            self.ratchet_manager
-                .rotate_ratchet(rng, self.destination.desc.address_hash)?;
-        }
+        // Then rotate the ratchet key 
+        self.ratchet_manager.rotate()?;
 
         Ok(packet)
     }
 
     /// Check if ratchets are enabled for this destination
     pub fn ratchets_enabled(&self) -> bool {
-        self.ratchet_manager
-            .is_enabled(self.destination.desc.address_hash)
+        self.ratchet_manager.state().has_ratchets()
     }
 
     /// Get the current encryption key (for ratcheted encryption)
     pub fn current_encryption_key(&self) -> Option<crate::identity::DerivedKey> {
-        self.ratchet_manager
-            .get_encryption_key(self.destination.desc.address_hash)
+        self.ratchet_manager.current_key()
     }
 
     /// Get keys for decryption attempts (current + old keys)
     pub fn decryption_keys(&self) -> Vec<crate::identity::DerivedKey> {
-        self.ratchet_manager
-            .get_decryption_keys(self.destination.desc.address_hash)
+        self.ratchet_manager.decrypt_keys()
     }
 
     /// Handle an incoming packet with ratchet-aware decryption
