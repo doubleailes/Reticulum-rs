@@ -96,17 +96,16 @@ impl RatchetState {
         let storage_path = storage_dir.map(|dir| {
             dir.join(format!(
                 "ratchets_{}",
-                hex::encode(&destination_hash)
+                hex::encode(destination_hash)
             ))
         });
 
         let mut ratchets = Vec::new();
 
-        if let Some(ref path) = storage_path {
-            if path.exists() {
+        if let Some(ref path) = storage_path
+            && path.exists() {
                 ratchets = Self::load_ratchets(path, &identity)?;
             }
-        }
 
         Ok(RatchetState {
             ratchets: Arc::new(RwLock::new(ratchets)),
@@ -125,7 +124,7 @@ impl RatchetState {
         let storage_path = storage_dir.map(|dir| {
             dir.join(format!(
                 "ratchets_{}",
-                hex::encode(&destination_hash)
+                hex::encode(destination_hash)
             ))
         });
 
