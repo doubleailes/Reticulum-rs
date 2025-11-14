@@ -438,17 +438,19 @@ impl RatchetedDestination {
         if self.ratchets_enabled() {
             // Try decryption with all ratchet keys (current and old)
             let keys = self.decryption_keys();
+            let mut temp_buf = [0u8; PACKET_MDU];
 
             for key in keys {
-                // Use a fresh buffer slice for each attempt to avoid borrowing issues
+                // Use a temporary buffer for each attempt to avoid using a dirty buffer
                 match self
                     .destination
                     .identity
-                    .decrypt(rng, data, &key, &mut out_buf[..])
+                    .decrypt(rng, data, &key, &mut temp_buf)
                 {
                     Ok(result) => {
                         // Copy result to the original buffer and return the proper slice
                         let result_len = result.len();
+                        out_buf[..result_len].copy_from_slice(result);
                         return Ok(&out_buf[..result_len]);
                     }
                     Err(_) => continue,
