@@ -325,22 +325,22 @@ pub struct RatchetedDestination {
 impl RatchetedDestination {
     /// Create a new ratcheted destination
     pub fn new(
-        identity: PrivateIdentity, 
+        identity: PrivateIdentity,
         name: DestinationName,
-        storage_dir: Option<PathBuf>
+        storage_dir: Option<PathBuf>,
     ) -> Result<Self, RnsError> {
         let destination = SingleInputDestination::new(identity, name);
-        
+
         // Create ratchet state for this destination - convert AddressHash to [u8; 16]
         let mut destination_hash = [0u8; 16];
         destination_hash.copy_from_slice(destination.desc.address_hash.as_slice());
-            
+
         let ratchet_state = ratchet::RatchetState::new(
             destination_hash,
             storage_dir,
-            Arc::new(*destination.identity.as_identity())
+            Arc::new(*destination.identity.as_identity()),
         )?;
-        
+
         let ratchet_manager = Arc::new(RatchetManager::new(ratchet_state));
 
         Ok(Self {
@@ -350,7 +350,7 @@ impl RatchetedDestination {
     }
 
     /// Announce with automatic ratchet key rotation
-    /// 
+    ///
     /// Sends an announce packet first, then rotates the ratchet key.
     /// This matches the Python RNS behavior where key rotation happens after announce transmission.
     pub fn announce<R: CryptoRngCore + Copy>(
@@ -360,8 +360,8 @@ impl RatchetedDestination {
     ) -> Result<Packet, RnsError> {
         // Send the announce packet first (matching Python RNS behavior)
         let packet = self.destination.announce(rng, app_data)?;
-        
-        // Then rotate the ratchet key 
+
+        // Then rotate the ratchet key
         self.ratchet_manager.rotate()?;
 
         Ok(packet)
