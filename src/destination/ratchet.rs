@@ -9,11 +9,11 @@ use fs2::FileExt;
 use rand_core::{CryptoRngCore, OsRng};
 use rmp_serde;
 use serde::{Deserialize, Serialize};
-use x25519_dalek::{StaticSecret, PublicKey};
+use x25519_dalek::{PublicKey, StaticSecret};
 
 use crate::{
     error::RnsError,
-    identity::{Identity, DerivedKey},
+    identity::{DerivedKey, Identity},
 };
 
 /// Result type for ratchet operations
@@ -89,23 +89,20 @@ pub struct RatchetState {
 impl RatchetState {
     /// Load ratchet state from storage (Python RNS compatible)
     pub fn load(
-        destination_hash: [u8; 16], 
+        destination_hash: [u8; 16],
         storage_dir: Option<PathBuf>,
-        identity: Arc<Identity>
+        identity: Arc<Identity>,
     ) -> RnsResult<Self> {
-        let storage_path = storage_dir.map(|dir| {
-            dir.join(format!(
-                "ratchets_{}",
-                hex::encode(destination_hash)
-            ))
-        });
+        let storage_path =
+            storage_dir.map(|dir| dir.join(format!("ratchets_{}", hex::encode(destination_hash))));
 
         let mut ratchets = Vec::new();
 
         if let Some(ref path) = storage_path
-            && path.exists() {
-                ratchets = Self::load_ratchets(path, &identity)?;
-            }
+            && path.exists()
+        {
+            ratchets = Self::load_ratchets(path, &identity)?;
+        }
 
         Ok(RatchetState {
             ratchets: Arc::new(RwLock::new(ratchets)),
@@ -118,15 +115,11 @@ impl RatchetState {
     /// Create a new ratchet state  
     pub fn new(
         destination_hash: [u8; 16],
-        storage_dir: Option<PathBuf>, 
-        identity: Arc<Identity>
+        storage_dir: Option<PathBuf>,
+        identity: Arc<Identity>,
     ) -> RnsResult<Self> {
-        let storage_path = storage_dir.map(|dir| {
-            dir.join(format!(
-                "ratchets_{}",
-                hex::encode(destination_hash)
-            ))
-        });
+        let storage_path =
+            storage_dir.map(|dir| dir.join(format!("ratchets_{}", hex::encode(destination_hash))));
 
         let state = Self {
             ratchets: Arc::new(RwLock::new(Vec::new())),
@@ -142,19 +135,19 @@ impl RatchetState {
     fn load_ratchets(path: &PathBuf, _identity: &Identity) -> RnsResult<Vec<RatchetKey>> {
         use std::fs::File;
         use std::io::Read;
-        
+
         // Open and lock file for reading
         let mut file = File::open(path)?;
         file.lock_shared()?;
-        
+
         let mut contents = Vec::new();
         file.read_to_end(&mut contents)?;
         file.unlock()?;
 
         // Deserialize ratchets directly from MessagePack
         // Note: For full Python RNS compatibility, we would add signature verification here
-        let ratchets: Vec<RatchetKey> = rmp_serde::from_slice(&contents)
-            .map_err(|e| RnsError::from(e.to_string()))?;
+        let ratchets: Vec<RatchetKey> =
+            rmp_serde::from_slice(&contents).map_err(|e| RnsError::from(e.to_string()))?;
 
         Ok(ratchets)
     }
@@ -165,23 +158,22 @@ impl RatchetState {
             return Ok(());
         };
 
-        let ratchets = self.ratchets.read()
-            .map_err(|_| RnsError::LockError)?;
+        let ratchets = self.ratchets.read().map_err(|_| RnsError::LockError)?;
 
         // Serialize ratchets to MessagePack
-        let ratchets_data = rmp_serde::to_vec(&*ratchets)
-            .map_err(|e| RnsError::from(e.to_string()))?;
+        let ratchets_data =
+            rmp_serde::to_vec(&*ratchets).map_err(|e| RnsError::from(e.to_string()))?;
 
         // Atomic write: temp file + rename
         let temp_path = path.with_extension("tmp");
-        
+
         {
             let mut temp_file = OpenOptions::new()
                 .write(true)
                 .create(true)
                 .truncate(true)
                 .open(&temp_path)?;
-            
+
             temp_file.lock_exclusive()?;
             temp_file.write_all(&ratchets_data)?;
             temp_file.sync_all()?;
@@ -194,8 +186,7 @@ impl RatchetState {
 
     /// Rotate to the next key (Python RNS compatible)
     pub fn rotate_key(&self) -> RnsResult<()> {
-        let mut ratchets = self.ratchets.write()
-            .map_err(|_| RnsError::LockError)?;
+        let mut ratchets = self.ratchets.write().map_err(|_| RnsError::LockError)?;
 
         // Generate new ratchet key
         let new_key = RatchetKey::generate(OsRng);
@@ -234,10 +225,7 @@ impl RatchetState {
 
     /// Check if we have any ratchets
     pub fn has_ratchets(&self) -> bool {
-        self.ratchets
-            .read()
-            .map(|r| !r.is_empty())
-            .unwrap_or(false)
+        self.ratchets.read().map(|r| !r.is_empty()).unwrap_or(false)
     }
 }
 
