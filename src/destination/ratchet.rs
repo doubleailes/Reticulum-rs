@@ -70,15 +70,10 @@ impl RatchetKey {
     /// Derive encryption key from this ratchet key (using destination key exchange)
     pub fn derive_key(&self, destination_identity: &Identity) -> RnsResult<DerivedKey> {
         let secret = StaticSecret::from(self.private_key);
-        
         // Use the X25519 public key from the destination identity
         let shared_secret = secret.diffie_hellman(&destination_identity.public_key);
-        
-        // Create DerivedKey - need to pad to 64 bytes if needed
-        let mut key_bytes = [0u8; 64];
-        key_bytes[..32].copy_from_slice(shared_secret.as_bytes());
-        
-        Ok(DerivedKey::new_from_bytes(&key_bytes))
+        // Use the established KDF path to obtain a full-strength key
+        Ok(DerivedKey::new(&shared_secret, None))
     }
 }
 
