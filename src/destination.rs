@@ -338,7 +338,7 @@ impl RatchetedDestination {
         let ratchet_state = ratchet::RatchetState::new(
             destination_hash,
             storage_dir,
-            Arc::new(destination.identity.as_identity().clone())
+            Arc::new(*destination.identity.as_identity())
         )?;
         
         let ratchet_manager = Arc::new(RatchetManager::new(ratchet_state));
