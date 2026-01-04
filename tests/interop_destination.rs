@@ -106,8 +106,7 @@ fn python_validates_rust_announce_without_ratchet() {
     assert!(!packet.header.context_flag.is_set());
 
     let packet_hex = hex::encode(packet_to_bytes(&packet));
-    let (code, _out, err) =
-        run_python(&["tests/python/validate_announce.py", &packet_hex]);
+    let (code, _out, err) = run_python(&["tests/python/validate_announce.py", &packet_hex]);
     assert_eq!(code, 0, "python failed to validate announce: {err}");
 }
 
@@ -128,9 +127,11 @@ fn python_validates_rust_announce_with_ratchet() {
     assert!(packet.header.context_flag.is_set());
 
     let packet_hex = hex::encode(packet_to_bytes(&packet));
-    let (code, _out, err) =
-        run_python(&["tests/python/validate_announce.py", &packet_hex]);
-    assert_eq!(code, 0, "python failed to validate ratcheted announce: {err}");
+    let (code, _out, err) = run_python(&["tests/python/validate_announce.py", &packet_hex]);
+    assert_eq!(
+        code, 0,
+        "python failed to validate ratcheted announce: {err}"
+    );
 }
 
 #[test]

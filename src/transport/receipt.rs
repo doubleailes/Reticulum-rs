@@ -73,7 +73,12 @@ struct CallbackSlots {
 }
 
 impl PacketReceipt {
-    pub(crate) fn new(hash: Hash, destination: AddressHash, identity: Identity, timeout: Duration) -> Self {
+    pub(crate) fn new(
+        hash: Hash,
+        destination: AddressHash,
+        identity: Identity,
+        timeout: Duration,
+    ) -> Self {
         Self {
             inner: Arc::new(PacketReceiptInner {
                 hash,
@@ -115,7 +120,8 @@ impl PacketReceipt {
     }
 
     pub fn round_trip_time(&self) -> Option<Duration> {
-        self.concluded_at().map(|at| at.saturating_duration_since(self.sent_at()))
+        self.concluded_at()
+            .map(|at| at.saturating_duration_since(self.sent_at()))
     }
 
     pub fn proved(&self) -> bool {
@@ -233,14 +239,7 @@ impl PacketReceipt {
     }
 
     fn run_delivery_callback(&self) {
-        if let Some(callback) = self
-            .inner
-            .callbacks
-            .lock()
-            .unwrap()
-            .delivery
-            .clone()
-        {
+        if let Some(callback) = self.inner.callbacks.lock().unwrap().delivery.clone() {
             let receipt = self.clone();
             tokio::spawn(async move {
                 (callback)(receipt);
@@ -249,14 +248,7 @@ impl PacketReceipt {
     }
 
     fn run_timeout_callback(&self) {
-        if let Some(callback) = self
-            .inner
-            .callbacks
-            .lock()
-            .unwrap()
-            .timeout
-            .clone()
-        {
+        if let Some(callback) = self.inner.callbacks.lock().unwrap().timeout.clone() {
             let receipt = self.clone();
             tokio::spawn(async move {
                 (callback)(receipt);

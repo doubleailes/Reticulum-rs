@@ -184,7 +184,11 @@ impl Identity {
     }
 
     pub fn derive_key<R: CryptoRngCore + Copy>(&self, rng: R) -> DerivedKey {
-        DerivedKey::new_from_ephemeral_key(rng, &self.public_key, Some(self.address_hash.as_slice()))
+        DerivedKey::new_from_ephemeral_key(
+            rng,
+            &self.public_key,
+            Some(self.address_hash.as_slice()),
+        )
     }
 }
 
@@ -601,7 +605,12 @@ mod tests {
 
         let mut out_buf = [0u8; 256];
         let cipher = identity
-            .encrypt(TestRng::new(0x0f1e2d3c4b5a6978), b"header-test", &derived, &mut out_buf)
+            .encrypt(
+                TestRng::new(0x0f1e2d3c4b5a6978),
+                b"header-test",
+                &derived,
+                &mut out_buf,
+            )
             .expect("ciphertext");
 
         let header = derived

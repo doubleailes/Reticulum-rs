@@ -71,18 +71,23 @@ impl LinkTable {
             original_destination: destination,
             taken_hops,
             remaining_hops: 0,
-            validated: false
+            validated: false,
         };
 
         self.0.insert(link_id, entry);
     }
 
     pub fn original_destination(&self, link_id: &LinkId) -> Option<AddressHash> {
-        self.0.get(&link_id).filter(|e| e.validated).map(|e| e.original_destination)
+        self.0
+            .get(&link_id)
+            .filter(|e| e.validated)
+            .map(|e| e.original_destination)
     }
 
     pub fn handle_keepalive(&self, packet: &Packet) -> Option<(Packet, AddressHash)> {
-        self.0.get(&packet.destination).map(|entry| send_backwards(packet, entry))
+        self.0
+            .get(&packet.destination)
+            .map(|entry| send_backwards(packet, entry))
     }
 
     pub fn handle_proof(&mut self, proof: &Packet) -> Option<(Packet, AddressHash)> {
@@ -92,8 +97,8 @@ impl LinkTable {
                 entry.validated = true;
 
                 Some(send_backwards(proof, entry))
-            },
-            None => None
+            }
+            None => None,
         }
     }
 
