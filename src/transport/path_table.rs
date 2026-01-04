@@ -2,7 +2,7 @@ use std::{collections::HashMap, time::Instant};
 
 use crate::{
     hash::{AddressHash, Hash},
-    packet::{DestinationType, Header, HeaderType, IfacFlag, Packet, PacketType},
+    packet::{DestinationType, Header, HeaderType, IfacFlag, Packet, PacketType, PropagationType},
 };
 
 pub struct PathEntry {
@@ -93,10 +93,10 @@ impl PathTable {
         (
             Packet {
                 header: Header {
-                    ifac_flag: IfacFlag::Authenticated,
+                    ifac_flag: IfacFlag::Open,
                     header_type: HeaderType::Type2,
                     context_flag: original_packet.header.context_flag,
-                    propagation_type: original_packet.header.propagation_type,
+                    propagation_type: PropagationType::Transport,
                     destination_type: original_packet.header.destination_type,
                     packet_type: original_packet.header.packet_type,
                     hops: original_packet.header.hops + 1,
@@ -140,10 +140,10 @@ impl PathTable {
         (
             Packet {
                 header: Header {
-                    ifac_flag: IfacFlag::Authenticated,
+                    ifac_flag: IfacFlag::Open,
                     header_type: HeaderType::Type2,
                     context_flag: original_packet.header.context_flag,
-                    propagation_type: original_packet.header.propagation_type,
+                    propagation_type: PropagationType::Transport,
                     destination_type: original_packet.header.destination_type,
                     packet_type: original_packet.header.packet_type,
                     hops: original_packet.header.hops,
