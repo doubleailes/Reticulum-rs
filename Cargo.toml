@@ -44,6 +44,7 @@ tokio-stream = "0.1.17"
 tokio-util = "0.7.15"
 
 rmp = "0.8.14"
+rmp-serde = "1.3"
 serde = { version = "1.0.219", features = ["derive"] }
 
 # Logging
@@ -101,3 +102,7 @@ path = "examples/multihop.rs"
 [[example]]
 name = "ratchet"
 path = "examples/ratchet.rs"
+
+[[example]]
+name = "filetransfer"
+path = "examples/filetransfer.rs"
