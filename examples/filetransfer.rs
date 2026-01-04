@@ -114,7 +114,7 @@ type ExampleResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 #[tokio::main]
 async fn main() -> ExampleResult<()> {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("trace")).init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("debug")).init();
 
     let args = match parse_args() {
         Ok(args) => args,
@@ -266,6 +266,7 @@ async fn run_server(args: ServerArgs, connect: Option<String>) -> ExampleResult<
                 break;
             }
             _ = announce_interval.tick() => {
+                log::debug!("Re-announcing server destination");
                 transport.send_announce(&destination, None).await;
             }
             event = link_events.recv() => {
