@@ -282,6 +282,18 @@ impl Packet {
                 .into(),
         )
     }
+    pub fn with_header_type(mut self, header_type: HeaderType) -> Self {
+        self.header.header_type = header_type;
+        self
+    }
+    pub fn with_propagation_type(mut self, propagation_type: PropagationType) -> Self {
+        self.header.propagation_type = propagation_type;
+        self
+    }
+    pub fn bump_hops(mut self) -> Self {
+        self.header.hops += 1;
+        self
+    }
 }
 
 impl Default for Packet {

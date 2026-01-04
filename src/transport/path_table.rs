@@ -93,7 +93,7 @@ impl PathTable {
         (
             Packet {
                 header: Header {
-                    ifac_flag: IfacFlag::Open,
+                    ifac_flag: original_packet.header.ifac_flag,
                     header_type: HeaderType::Type2,
                     context_flag: original_packet.header.context_flag,
                     propagation_type: PropagationType::Transport,
@@ -101,7 +101,7 @@ impl PathTable {
                     packet_type: original_packet.header.packet_type,
                     hops: original_packet.header.hops + 1,
                 },
-                ifac: None,
+                ifac: original_packet.ifac,
                 destination: original_packet.destination,
                 transport: Some(entry.received_from),
                 context: original_packet.context,
