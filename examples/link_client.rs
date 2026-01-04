@@ -31,11 +31,7 @@ async fn main() {
         )
         .await;
 
-    let packet = in_destination
-        .lock()
-        .await
-        .announce(OsRng, None)
-        .unwrap();
+    let packet = in_destination.lock().await.announce(OsRng, None).unwrap();
     let _ = transport.send_packet(packet).await;
 
     tokio::spawn(async move {
@@ -52,7 +48,6 @@ async fn main() {
             }
         }
     });
-
 
     let _ = tokio::signal::ctrl_c().await;
 }

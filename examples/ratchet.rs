@@ -7,8 +7,6 @@ use reticulum::identity::PrivateIdentity;
 use reticulum::iface::tcp_client::TcpClient;
 use reticulum::transport::{PacketReceiptStatus, Transport, TransportConfig};
 
-
-
 fn store_identity_to_file(id: &PrivateIdentity, path: &str) {
     use std::fs::File;
     use std::io::Write;
@@ -34,7 +32,7 @@ async fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("trace")).init();
 
     let args: Vec<String> = env::args().collect();
-    
+
     if args.len() != 2 {
         eprintln!("Usage: {} <32-character-hex-destination>", args[0]);
         eprintln!("Example: {} 564f0ec8b6ff3cbbedb3b2bb6069f567", args[0]);
@@ -77,15 +75,19 @@ async fn main() {
     loop {
         if transport.has_path(&destination_hash).await {
             log::info!("Destination found in cache for hash: {}", destination_hash);
-            
+
             // This handles encryption automatically, just like Python does
             let payload: &str = "Hello, Reticulum!";
-            
+
             // Send the packet to the destination with the given hash
             // The transport will handle routing and encryption automatically
             // and get the ratchet pub key of the destination in the cache
             let receipt = transport
-                .send_to_destination(&destination_hash, payload.as_bytes(), reticulum::packet::PacketContext::None)
+                .send_to_destination(
+                    &destination_hash,
+                    payload.as_bytes(),
+                    reticulum::packet::PacketContext::None,
+                )
                 .await
                 .expect("packet send");
 
@@ -98,10 +100,7 @@ async fn main() {
                 );
             });
             receipt.set_timeout_callback(|receipt| {
-                log::warn!(
-                    "Packet to {} timed out",
-                    receipt.destination()
-                );
+                log::warn!("Packet to {} timed out", receipt.destination());
             });
 
             let status = receipt.wait().await;
@@ -114,7 +113,7 @@ async fn main() {
                 }
                 PacketReceiptStatus::Sent => {}
             }
-            
+
             tokio::time::sleep(Duration::from_secs(1)).await;
             break;
         } else {

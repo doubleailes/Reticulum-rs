@@ -1,7 +1,9 @@
 #![cfg(feature = "python-interop")]
 
 use rand_core::OsRng;
-use reticulum::identity::{DecryptIdentity, EncryptIdentity, Identity, PrivateIdentity, PUBLIC_KEY_LENGTH};
+use reticulum::identity::{
+    DecryptIdentity, EncryptIdentity, Identity, PrivateIdentity, PUBLIC_KEY_LENGTH,
+};
 
 mod python_support;
 use python_support::{python_available, run_python};
@@ -74,7 +76,15 @@ fn rust_decrypt_hex(ct_hex: &str, recipient_priv_hex: &str) -> Vec<u8> {
     let mut out_buf = vec![0u8; cipher.len()];
     let mut ratchet_id = None;
     let plaintext = recipient
-        .decrypt_token(OsRng, &cipher, None, &[], false, &mut ratchet_id, &mut out_buf)
+        .decrypt_token(
+            OsRng,
+            &cipher,
+            None,
+            &[],
+            false,
+            &mut ratchet_id,
+            &mut out_buf,
+        )
         .expect("decrypt");
 
     assert!(ratchet_id.is_none());
