@@ -5,7 +5,9 @@ fn manifest_dir() -> &'static str {
 }
 
 fn python_path_env() -> String {
-    let reference = PathBuf::from(manifest_dir()).join("reference").join("Reticulum");
+    let reference = PathBuf::from(manifest_dir())
+        .join("reference")
+        .join("Reticulum");
     match env::var("PYTHONPATH") {
         Ok(existing) if !existing.is_empty() => format!("{}:{}", reference.display(), existing),
         _ => reference.display().to_string(),

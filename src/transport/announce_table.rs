@@ -4,8 +4,8 @@ use tokio::time::{Duration, Instant};
 
 use crate::hash::AddressHash;
 use crate::packet::{
-    DestinationType, Header, HeaderType, IfacFlag,
-    Packet, PacketContext, PacketType, PropagationType
+    DestinationType, Header, HeaderType, IfacFlag, Packet, PacketContext, PacketType,
+    PropagationType,
 };
 
 pub struct AnnounceEntry {
@@ -18,10 +18,7 @@ pub struct AnnounceEntry {
 }
 
 impl AnnounceEntry {
-    pub fn retransmit(
-        &mut self,
-        transport_id: &AddressHash,
-    ) -> Option<(AddressHash, Packet)> {
+    pub fn retransmit(&mut self, transport_id: &AddressHash) -> Option<(AddressHash, Packet)> {
         if self.retries == 0 || Instant::now() >= self.timeout {
             return None;
         }
@@ -62,12 +59,7 @@ impl AnnounceTable {
         }
     }
 
-    pub fn add(
-        &mut self,
-        announce: &Packet,
-        destination: AddressHash,
-        received_from: AddressHash
-    ) {
+    pub fn add(&mut self, announce: &Packet, destination: AddressHash, received_from: AddressHash) {
         if self.map.contains_key(&destination) {
             return;
         }
@@ -102,7 +94,9 @@ impl AnnounceTable {
         transport_id: &AddressHash,
     ) -> Option<(AddressHash, Packet)> {
         // temporary hack
-        self.map.get_mut(dest_hash).map_or(None, |e| e.retransmit(transport_id))
+        self.map
+            .get_mut(dest_hash)
+            .map_or(None, |e| e.retransmit(transport_id))
     }
     pub fn get(&self, destination: &AddressHash) -> Option<&Packet> {
         self.map.get(destination).map(|entry| &entry.packet)
@@ -112,11 +106,7 @@ impl AnnounceTable {
         self.map.values().map(|entry| &entry.packet)
     }
 
-
-    pub fn to_retransmit(
-        &mut self,
-        transport_id: &AddressHash,
-    ) -> Vec<(AddressHash, Packet)> {
+    pub fn to_retransmit(&mut self, transport_id: &AddressHash) -> Vec<(AddressHash, Packet)> {
         let mut packets = vec![];
         let mut completed = vec![];
 
