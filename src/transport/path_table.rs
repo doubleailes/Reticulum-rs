@@ -101,7 +101,7 @@ impl PathTable {
                     packet_type: original_packet.header.packet_type,
                     hops: original_packet.header.hops + 1,
                 },
-                ifac: original_packet.ifac,
+                ifac: None,
                 destination: original_packet.destination,
                 transport: Some(entry.received_from),
                 context: original_packet.context,
