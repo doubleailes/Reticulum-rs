@@ -607,14 +607,14 @@ impl Drop for Transport {
 }
 
 impl TransportHandler {
-    async fn send_packet(&mut self, packet: Packet) -> Option<PacketReceipt> {
+    async fn send_packet(&mut self, original_packet: Packet) -> Option<PacketReceipt> {
+        let (packet, maybe_iface) = self.path_table.handle_packet(&original_packet);
         let receipt = self.maybe_create_receipt(&packet).await;
-        let message = TxMessage {
-            tx_type: TxMessageType::Broadcast(None),
-            packet,
-        };
+        let tx_type = maybe_iface
+            .map(TxMessageType::Direct)
+            .unwrap_or(TxMessageType::Broadcast(None));
 
-        self.send(message).await;
+        self.send(TxMessage { tx_type, packet }).await;
         receipt
     }
 
@@ -842,7 +842,7 @@ impl TransportHandler {
                 } else {
                     ContextFlag::Set
                 },
-                propagation_type: PropagationType::Transport,
+                propagation_type: PropagationType::Broadcast,
                 destination_type: DestinationType::Single,
                 packet_type: PacketType::Data,
                 ..Default::default()
