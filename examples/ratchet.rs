@@ -55,7 +55,7 @@ async fn main() {
         .iface_manager()
         .lock()
         .await
-        .spawn(TcpClient::new("127.0.0.1:4242"), TcpClient::spawn);
+        .spawn(TcpClient::new("amsterdam.connect.reticulum.network:4965"), TcpClient::spawn);
     log::info!("TCP Client listening on {}", client_addr);
     let identity_path = "/tmp/client_identity";
     let _id = load_identity_from_file(identity_path).unwrap_or_else(|| {
