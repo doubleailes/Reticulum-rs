@@ -1,18 +1,22 @@
+use std::collections::HashMap;
 use std::env;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use rmp_serde::{from_slice, to_vec};
 use serde::{Deserialize, Serialize};
 use tokio::fs;
+use tokio::task;
 use tokio::time::{self, Duration};
 
 use reticulum::destination::link::{Link, LinkEvent};
 use reticulum::destination::{DestinationDesc, DestinationName, SingleOutputDestination};
-use reticulum::hash::AddressHash;
+use reticulum::hash::{AddressHash, Hash};
 use reticulum::identity::PrivateIdentity;
 use reticulum::iface::tcp_client::TcpClient;
 use reticulum::iface::tcp_server::TcpServer;
+use reticulum::resource::{ResourceEvent, ResourceManager, ResourceStrategy};
 use reticulum::transport::{Transport, TransportConfig};
 
 const APP_NAME: &str = "example_utilities";
@@ -21,7 +25,10 @@ const SERVER_IDENTITY_TAG: &str = "filetransfer-server";
 const CLIENT_IDENTITY_TAG: &str = "filetransfer-client";
 const DEFAULT_LISTEN: &str = "0.0.0.0:4242";
 const DEFAULT_CONNECT: &str = "127.0.0.1:4242";
-const CHUNK_SIZE: usize = 1200;
+#[derive(Debug, Clone, Copy)]
+enum SessionDirection {
+    Inbound,
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 enum ClientMessage {
@@ -32,20 +39,50 @@ enum ClientMessage {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct FileEntry {
     name: String,
-    size: u64,
+    size: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 enum ServerMessage {
     FileList { files: Vec<FileEntry> },
-    FileChunk {
-        name: String,
-        offset: u64,
-        total: u64,
-        data: Vec<u8>,
-        is_last: bool,
-    },
     Error { message: String },
+}
+
+struct LinkSession {
+    resource: ResourceManager,
+    outgoing: HashMap<Hash, String>,
+}
+
+impl LinkSession {
+    fn new(link: Arc<tokio::sync::Mutex<Link>>) -> Self {
+        let mut manager = ResourceManager::new(link);
+        manager.set_strategy(ResourceStrategy::AcceptAll);
+        Self {
+            resource: manager,
+            outgoing: HashMap::new(),
+        }
+    }
+}
+
+async fn ensure_session(
+    transport: &Transport,
+    sessions: &mut HashMap<AddressHash, LinkSession>,
+    link_id: &AddressHash,
+    direction: SessionDirection,
+) -> ExampleResult<()> {
+    if sessions.contains_key(link_id) {
+        return Ok(());
+    }
+
+    let link = match direction {
+        SessionDirection::Inbound => transport
+            .find_in_link(link_id)
+            .await
+            .ok_or_else(|| format!("Link {link_id} unavailable for inbound session"))?,
+    };
+
+    sessions.insert(*link_id, LinkSession::new(link));
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -144,7 +181,9 @@ fn parse_args() -> Result<Args, String> {
                 file = Some(iter.next().ok_or("--file requires a filename")?);
             }
             "--output" => {
-                output_dir = Some(PathBuf::from(iter.next().ok_or("--output requires a path")?));
+                output_dir = Some(PathBuf::from(
+                    iter.next().ok_or("--output requires a path")?,
+                ));
             }
             "-h" | "--help" => {
                 print_usage(&env::args().next().unwrap_or_else(|| "filetransfer".into()));
@@ -160,15 +199,13 @@ fn parse_args() -> Result<Args, String> {
 
     if let Some(dir) = serve_dir {
         return Ok(Args {
-            mode: Mode::Server(ServerArgs {
-                dir,
-                listen,
-            }),
+            mode: Mode::Server(ServerArgs { dir, listen }),
             connect,
         });
     }
 
-    let destination = destination.ok_or_else(|| "Client mode requires --destination".to_string())?;
+    let destination =
+        destination.ok_or_else(|| "Client mode requires --destination".to_string())?;
     let output = output_dir
         .or_else(|| std::env::current_dir().ok())
         .ok_or_else(|| "Could not resolve working directory".to_string())?;
@@ -195,11 +232,10 @@ async fn run_server(args: ServerArgs, connect: Option<String>) -> ExampleResult<
     config.set_retransmit(true);
     let mut transport = Transport::new(config);
 
-    transport
-    .iface_manager()
-    .lock()
-    .await
-    .spawn(TcpServer::new(args.listen.clone(), transport.iface_manager()), TcpServer::spawn);
+    transport.iface_manager().lock().await.spawn(
+        TcpServer::new(args.listen.clone(), transport.iface_manager()),
+        TcpServer::spawn,
+    );
     if let Some(addr) = connect {
         transport
             .iface_manager()
@@ -220,6 +256,7 @@ async fn run_server(args: ServerArgs, connect: Option<String>) -> ExampleResult<
     );
 
     let mut link_events = transport.in_link_events();
+    let mut sessions: HashMap<AddressHash, LinkSession> = HashMap::new();
     let mut announce_interval = time::interval(Duration::from_secs(45));
 
     loop {
@@ -234,7 +271,7 @@ async fn run_server(args: ServerArgs, connect: Option<String>) -> ExampleResult<
             event = link_events.recv() => {
                 match event {
                     Ok(event_data) => {
-                        handle_server_link_event(&transport, &args.dir, event_data).await?;
+                        handle_server_link_event(&transport, &mut sessions, &args.dir, event_data).await?;
                     }
                     Err(err) => {
                         log::warn!("Link event error: {err}");
@@ -250,19 +287,51 @@ async fn run_server(args: ServerArgs, connect: Option<String>) -> ExampleResult<
 
 async fn handle_server_link_event(
     transport: &Transport,
+    sessions: &mut HashMap<AddressHash, LinkSession>,
     dir: &Path,
     event: reticulum::destination::link::LinkEventData,
 ) -> ExampleResult<()> {
     match event.event {
         LinkEvent::Activated => {
+            ensure_session(transport, sessions, &event.id, SessionDirection::Inbound).await?;
             log::info!("Link {} established", event.id);
-            send_file_list(transport, &event.id, dir).await?;
+            send_plain_file_list(transport, &event.id, dir).await?;
         }
         LinkEvent::Data(payload) => {
-            process_client_message(transport, &event.id, dir, payload.as_slice()).await?;
+            process_client_message(transport, sessions, &event.id, dir, payload.as_slice()).await?;
+        }
+        LinkEvent::Resource(packet) => {
+            if let Some(session) = sessions.get_mut(&event.id) {
+                let events = session
+                    .resource
+                    .handle_packet(transport, &packet)
+                    .await
+                    .map_err(|err| format!("resource handling failed: {err:?}"))?;
+                for evt in events {
+                    match evt {
+                        ResourceEvent::OutgoingComplete { hash } => {
+                            if let Some(name) = session.outgoing.remove(&hash) {
+                                log::info!("Completed transfer of {}", name);
+                            } else {
+                                log::info!("Completed transfer for resource {}", hash);
+                            }
+                        }
+                        ResourceEvent::IncomingAccepted { hash, .. } => {
+                            log::info!("Client started sending resource {}", hash);
+                        }
+                        ResourceEvent::IncomingComplete { hash, .. } => {
+                            log::info!("Received resource {} from client", hash);
+                        }
+                        _ => {}
+                    }
+                }
+            } else {
+                log::trace!("Resource packet for unknown link {}", event.id);
+            }
         }
         LinkEvent::Closed => {
             log::info!("Link {} closed", event.id);
+            sessions.remove(&event.id);
         }
     }
 
@@ -271,59 +340,57 @@ async fn handle_server_link_event(
 
 async fn process_client_message(
     transport: &Transport,
+    sessions: &mut HashMap<AddressHash, LinkSession>,
     link_id: &AddressHash,
     dir: &Path,
     data: &[u8],
 ) -> ExampleResult<()> {
     match from_slice::<ClientMessage>(data) {
         Ok(ClientMessage::List) => {
-            send_file_list(transport, link_id, dir).await?;
+            send_structured_file_list(transport, link_id, dir).await?;
         }
         Ok(ClientMessage::Download { name }) => {
-            if !is_safe_filename(&name) {
-                send_error(transport, link_id, "Illegal filename request").await?;
-                return Ok(());
-            }
-
-            let path = dir.join(&name);
-            if !path.exists() || !path.is_file() {
-                send_error(transport, link_id, "Requested file not found").await?;
-                return Ok(());
-            }
-
-            let data = fs::read(&path).await?;
-            let total = data.len() as u64;
-            let mut offset = 0u64;
-
-            for chunk in data.chunks(CHUNK_SIZE) {
-                let message = ServerMessage::FileChunk {
-                    name: name.clone(),
-                    offset,
-                    total,
-                    data: chunk.to_vec(),
-                    is_last: (offset as usize + chunk.len()) >= data.len(),
-                };
-
-                send_message_to_link(transport, link_id, &message).await?;
-                offset += chunk.len() as u64;
-            }
-
-            log::info!("Sent {} ({} bytes)", name, total);
+            send_file_resource(transport, sessions, link_id, dir, &name).await?;
         }
-        Err(err) => {
-            log::warn!("Failed to decode client message: {err}");
-            send_error(transport, link_id, "Malformed message").await?;
+        Err(_) => {
+            if let Ok(raw) = std::str::from_utf8(data) {
+                let trimmed = raw.trim_matches(char::from(0));
+                if trimmed.is_empty() {
+                    send_error(transport, link_id, "Empty filename request").await?;
+                } else {
+                    send_file_resource(transport, sessions, link_id, dir, trimmed).await?;
+                }
+            } else {
+                log::warn!("Failed to decode client message: unsupported format");
+                send_error(transport, link_id, "Malformed message").await?;
+            }
         }
     }
 
     Ok(())
 }
 
-async fn send_file_list(
+async fn send_plain_file_list(
     transport: &Transport,
     link_id: &AddressHash,
     dir: &Path,
 ) -> ExampleResult<()> {
+    let entries = gather_file_entries(dir)?;
+    let names: Vec<String> = entries.iter().map(|entry| entry.name.clone()).collect();
+    send_message_to_link(transport, link_id, &names).await
+}
+
+async fn send_structured_file_list(
+    transport: &Transport,
+    link_id: &AddressHash,
+    dir: &Path,
+) -> ExampleResult<()> {
+    let entries = gather_file_entries(dir)?;
+    let message = ServerMessage::FileList { files: entries };
+    send_message_to_link(transport, link_id, &message).await
+}
+
+fn gather_file_entries(dir: &Path) -> ExampleResult<Vec<FileEntry>> {
     let mut entries = Vec::new();
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
@@ -340,18 +407,57 @@ async fn send_file_list(
             let size = entry.metadata()?.len();
             entries.push(FileEntry {
                 name: name.to_string(),
-                size,
+                size: Some(size),
             });
         }
     }
 
     entries.sort_by(|a, b| a.name.cmp(&b.name));
-
-    let message = ServerMessage::FileList { files: entries };
-    send_message_to_link(transport, link_id, &message).await
+    Ok(entries)
 }
 
-async fn send_error(transport: &Transport, link_id: &AddressHash, message: &str) -> ExampleResult<()> {
+async fn send_file_resource(
+    transport: &Transport,
+    sessions: &mut HashMap<AddressHash, LinkSession>,
+    link_id: &AddressHash,
+    dir: &Path,
+    name: &str,
+) -> ExampleResult<()> {
+    if !is_safe_filename(name) {
+        send_error(transport, link_id, "Illegal filename request").await?;
+        return Ok(());
+    }
+
+    let path = dir.join(name);
+    if !path.exists() || !path.is_file() {
+        send_error(transport, link_id, "Requested file not found").await?;
+        return Ok(());
+    }
+
+    ensure_session(transport, sessions, link_id, SessionDirection::Inbound).await?;
+
+    let session = sessions
+        .get_mut(link_id)
+        .ok_or_else(|| format!("Session for link {link_id} disappeared"))?;
+
+    let data = fs::read(&path).await?;
+    let total = data.len();
+    let hash = session
+        .resource
+        .send(transport, data)
+        .await
+        .map_err(|err| format!("failed to send resource for {name}: {err:?}"))?;
+
+    session.outgoing.insert(hash, name.to_string());
+    log::info!("Sent {} ({} bytes) as resource {}", name, total, hash);
+    Ok(())
+}
+
+async fn send_error(
+    transport: &Transport,
+    link_id: &AddressHash,
+    message: &str,
+) -> ExampleResult<()> {
     let payload = ServerMessage::Error {
         message: message.to_string(),
     };
@@ -378,8 +484,7 @@ async fn send_packet_over_link(
 ) -> ExampleResult<()> {
     let packet = {
         let link = link.lock().await;
-        link
-            .data_packet(data)
+        link.data_packet(data)
             .map_err(|err| format!("failed to prepare link packet: {err}"))?
     };
 
@@ -389,7 +494,11 @@ async fn send_packet_over_link(
 
 async fn run_client(args: ClientArgs, connect: String) -> ExampleResult<()> {
     let identity = PrivateIdentity::new_from_name(CLIENT_IDENTITY_TAG);
-    let transport = Transport::new(TransportConfig::new("filetransfer-client", &identity, false));
+    let transport = Transport::new(TransportConfig::new(
+        "filetransfer-client",
+        &identity,
+        false,
+    ));
 
     transport
         .iface_manager()
@@ -401,9 +510,12 @@ async fn run_client(args: ClientArgs, connect: String) -> ExampleResult<()> {
     let desc = wait_for_destination_desc(&transport, &args.destination).await;
     let link = transport.link(desc).await;
     let link_id = *link.lock().await.id();
+    let mut resource = ResourceManager::new(link.clone());
+    resource.set_strategy(ResourceStrategy::AcceptAll);
 
     let mut events = transport.out_link_events();
-    let mut download_state = DownloadState::new(args.filename.clone());
+    let interactive_mode = args.filename.is_none();
+    let mut download_state = DownloadState::new(args.filename.clone(), interactive_mode);
 
     log::info!("Awaiting file list from {}", args.destination);
 
@@ -416,7 +528,16 @@ async fn run_client(args: ClientArgs, connect: String) -> ExampleResult<()> {
             event = events.recv() => {
                 match event {
                     Ok(event_data) if event_data.id == link_id => {
-                        if handle_client_event(&transport, &link, &mut download_state, &args, event_data.event).await? {
+                        if handle_client_event(
+                            &transport,
+                            &link,
+                            &mut resource,
+                            &mut download_state,
+                            &args,
+                            event_data.event,
+                        )
+                        .await?
+                        {
                             break;
                         }
                     }
@@ -436,6 +557,7 @@ async fn run_client(args: ClientArgs, connect: String) -> ExampleResult<()> {
 async fn handle_client_event(
     transport: &Transport,
     link: &Arc<tokio::sync::Mutex<Link>>,
+    resource: &mut ResourceManager,
     state: &mut DownloadState,
     args: &ClientArgs,
     event: LinkEvent,
@@ -446,34 +568,70 @@ async fn handle_client_event(
             request_list(transport, link).await?;
         }
         LinkEvent::Data(payload) => {
-            let message: ServerMessage = from_slice(payload.as_slice())?;
-            match message {
-                ServerMessage::FileList { files } => {
-                    print_file_list(&files);
-                    if let Some(request) = state.pending_request.clone() {
-                        if files.iter().any(|entry| entry.name == request) {
-                            request_file(transport, link, &request).await?;
-                            state.mark_request_sent(&request);
-                        } else {
-                            log::warn!("Requested file not present on server");
+            if let Ok(message) = from_slice::<ServerMessage>(payload.as_slice()) {
+                match message {
+                    ServerMessage::FileList { files } => {
+                        if handle_file_list_response(transport, link, state, files).await? {
                             return Ok(true);
                         }
-                    } else {
-                        return Ok(true);
+                    }
+                    ServerMessage::Error { message } => {
+                        log::error!("Server reported error: {message}");
+                        if state.is_interactive() {
+                            log::info!("Requesting file list again after error");
+                            request_list(transport, link).await?;
+                        } else {
+                            return Ok(true);
+                        }
                     }
                 }
-                ServerMessage::FileChunk { name, offset: _, total, data, is_last } => {
-                    state.ensure_target(&name);
-                    state.append(&data, total);
-
-                    if is_last {
-                        save_download(args, state).await?;
-                        return Ok(true);
-                    }
-                }
-                ServerMessage::Error { message } => {
-                    log::error!("Server reported error: {message}");
+            } else if let Ok(names) = from_slice::<Vec<String>>(payload.as_slice()) {
+                let files: Vec<FileEntry> = names
+                    .into_iter()
+                    .map(|name| FileEntry { name, size: None })
+                    .collect();
+                if handle_file_list_response(transport, link, state, files).await? {
                     return Ok(true);
+                }
+            } else {
+                log::warn!("Received unrecognized payload from server");
+            }
+        }
+        LinkEvent::Resource(packet) => {
+            let events = resource
+                .handle_packet(transport, &packet)
+                .await
+                .map_err(|err| format!("resource handling failed: {err:?}"))?;
+
+            for evt in events {
+                match evt {
+                    ResourceEvent::IncomingAccepted { total_size, .. } => {
+                        log::info!("Server accepted download request ({} bytes)", total_size);
+                    }
+                    ResourceEvent::IncomingProgress {
+                        received_parts,
+                        total_parts,
+                        ..
+                    } => {
+                        log::info!(
+                            "Download progress: {}/{} parts received",
+                            received_parts,
+                            total_parts
+                        );
+                    }
+                    ResourceEvent::IncomingComplete { data, .. } => {
+                        state.store_data(data);
+                        save_download(args, state).await?;
+                        if state.is_interactive() {
+                            log::info!("Download complete. Fetching file list again...");
+                            request_list(transport, link).await?;
+                        } else {
+                            return Ok(true);
+                        }
+                    }
+                    ResourceEvent::OutgoingComplete { hash } => {
+                        log::info!("Client resource {} sent successfully", hash);
+                    }
                 }
             }
         }
@@ -481,6 +639,48 @@ async fn handle_client_event(
             log::info!("Link closed by server");
             return Ok(true);
         }
+    }
+
+    Ok(false)
+}
+
+async fn handle_file_list_response(
+    transport: &Transport,
+    link: &Arc<tokio::sync::Mutex<Link>>,
+    state: &mut DownloadState,
+    files: Vec<FileEntry>,
+) -> ExampleResult<bool> {
+    print_file_list(&files);
+    if let Some(request) = state.pending_request.clone() {
+        if files.iter().any(|entry| entry.name == request) {
+            request_file(transport, link, &request).await?;
+            state.mark_request_sent(&request);
+        } else {
+            log::warn!("Requested file {request} no longer present on server; refreshing list");
+            if state.is_interactive() {
+                request_list(transport, link).await?;
+            } else {
+                return Ok(true);
+            }
+        }
+    } else if state.is_interactive() {
+        let selection = prompt_user_selection(files).await?;
+        match selection {
+            UserSelection::File(name) => {
+                request_file(transport, link, &name).await?;
+                state.mark_request_sent(&name);
+            }
+            UserSelection::Refresh => {
+                request_list(transport, link).await?;
+            }
+            UserSelection::Quit => {
+                log::info!("User chose to quit filetransfer client");
+                return Ok(true);
+            }
+        }
+    } else {
+        log::info!("No file requested and interactive mode disabled; exiting");
+        return Ok(true);
     }
 
     Ok(false)
@@ -547,7 +747,82 @@ fn print_file_list(files: &[FileEntry]) {
 
     println!("Available files:");
     for (idx, entry) in files.iter().enumerate() {
-        println!("  {:02}. {:<30} {:>8} bytes", idx + 1, entry.name, entry.size);
+        let size_display = entry
+            .size
+            .map(|size| format!("{:>8}", size))
+            .unwrap_or_else(|| "   ?".to_string());
+        println!(
+            "  {:02}. {:<30} {} bytes",
+            idx + 1,
+            entry.name,
+            size_display
+        );
+    }
+}
+
+enum UserSelection {
+    File(String),
+    Refresh,
+    Quit,
+}
+
+async fn prompt_user_selection(files: Vec<FileEntry>) -> ExampleResult<UserSelection> {
+    let selection = task::spawn_blocking(move || prompt_user_selection_blocking(files))
+        .await
+        .map_err(|err| {
+            Box::<dyn std::error::Error + Send + Sync>::from(io::Error::new(
+                io::ErrorKind::Other,
+                format!("failed to prompt user: {err}"),
+            ))
+        })?;
+
+    selection
+}
+
+fn prompt_user_selection_blocking(files: Vec<FileEntry>) -> ExampleResult<UserSelection> {
+    let mut input = String::new();
+    loop {
+        if files.is_empty() {
+            println!("\nNo files are currently available on the server.");
+            println!("Type 'r' to refresh or 'q' to quit.");
+        } else {
+            println!("\nSelect a file by number or name (r to refresh, q to quit):");
+        }
+
+        print!("> ");
+        io::stdout().flush()?;
+        input.clear();
+        io::stdin().read_line(&mut input)?;
+        let trimmed = input.trim();
+
+        if trimmed.eq_ignore_ascii_case("q") {
+            return Ok(UserSelection::Quit);
+        }
+
+        if trimmed.eq_ignore_ascii_case("r") {
+            return Ok(UserSelection::Refresh);
+        }
+
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        if files.is_empty() {
+            println!("No files to select; request a refresh or quit.");
+            continue;
+        }
+
+        if let Ok(idx) = trimmed.parse::<usize>() {
+            if idx >= 1 && idx <= files.len() {
+                return Ok(UserSelection::File(files[idx - 1].name.clone()));
+            }
+        }
+
+        if let Some(entry) = files.iter().find(|entry| entry.name == trimmed) {
+            return Ok(UserSelection::File(entry.name.clone()));
+        }
+
+        println!("Unrecognized selection '{trimmed}'. Please try again.");
     }
 }
 
@@ -589,20 +864,24 @@ fn is_safe_filename(name: &str) -> bool {
 }
 
 struct DownloadState {
+    interactive: bool,
     pending_request: Option<String>,
     target: Option<String>,
     buffer: Vec<u8>,
-    expected_total: Option<u64>,
 }
 
 impl DownloadState {
-    fn new(request: Option<String>) -> Self {
+    fn new(request: Option<String>, interactive: bool) -> Self {
         Self {
+            interactive,
             pending_request: request,
             target: None,
             buffer: Vec::new(),
-            expected_total: None,
         }
+    }
+
+    fn is_interactive(&self) -> bool {
+        self.interactive
     }
 
     fn mark_request_sent(&mut self, name: &str) {
@@ -613,25 +892,14 @@ impl DownloadState {
     fn begin_transfer(&mut self, name: String) {
         self.target = Some(name);
         self.buffer.clear();
-        self.expected_total = None;
     }
 
-    fn ensure_target(&mut self, name: &str) {
-        if self.target.as_deref() != Some(name) {
-            self.begin_transfer(name.to_string());
-        }
-    }
-
-    fn append(&mut self, chunk: &[u8], total: u64) {
-        if self.expected_total.is_none() {
-            self.expected_total = Some(total);
-        }
-        self.buffer.extend_from_slice(chunk);
+    fn store_data(&mut self, data: Vec<u8>) {
+        self.buffer = data;
     }
 
     fn reset(&mut self) {
         self.target = None;
         self.buffer.clear();
-        self.expected_total = None;
     }
 }

@@ -1,10 +1,10 @@
 use std::collections::HashMap;
-use std::sync::OnceLock;
 use std::sync::Mutex;
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-use crate::hash::AddressHash;
 use super::{ratchet_id_from_pub, RatchetId, PUBLIC_KEY_LENGTH};
+use crate::hash::AddressHash;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CachedRatchet {
