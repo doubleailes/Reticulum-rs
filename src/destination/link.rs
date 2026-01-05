@@ -118,7 +118,15 @@ pub enum LinkHandleResult {
 pub enum LinkEvent {
     Activated,
     Data(LinkPayload),
+    Resource(LinkResourcePacket),
     Closed,
+}
+
+#[derive(Clone)]
+pub struct LinkResourcePacket {
+    pub packet_type: PacketType,
+    pub context: PacketContext,
+    pub payload: LinkPayload,
 }
 
 #[derive(Clone)]
@@ -281,6 +289,37 @@ impl Link {
                     return LinkHandleResult::None;
                 }
             }
+            PacketContext::Resource => {
+                self.post_event(LinkEvent::Resource(LinkResourcePacket {
+                    packet_type: packet.header.packet_type,
+                    context: packet.context,
+                    payload: LinkPayload::new_from_slice(packet.data.as_slice()),
+                }));
+            }
+            PacketContext::ResourceAdvrtisement
+            | PacketContext::ResourceRequest
+            | PacketContext::ResourceHashUpdate
+            | PacketContext::ResourceInitiatorCancel
+            | PacketContext::ResourceReceiverCancel => {
+                let mut buffer = [0u8; PACKET_MDU];
+                match self.decrypt(packet.data.as_slice(), &mut buffer[..]) {
+                    Ok(plaintext) => {
+                        self.post_event(LinkEvent::Resource(LinkResourcePacket {
+                            packet_type: packet.header.packet_type,
+                            context: packet.context,
+                            payload: LinkPayload::new_from_slice(plaintext),
+                        }));
+                    }
+                    Err(err) => {
+                        log::error!(
+                            "link({}): failed to decrypt {:?} packet: {}",
+                            self.id,
+                            packet.context,
+                            err
+                        );
+                    }
+                }
+            }
             _ => {}
         }
 
@@ -315,6 +354,17 @@ impl Link {
                     } else {
                         log::warn!("link({}): proof is not valid", self.id);
                     }
+                } else if matches!(
+                    packet.context,
+                    PacketContext::ResourceProof
+                        | PacketContext::ResourceInitiatorCancel
+                        | PacketContext::ResourceReceiverCancel
+                ) {
+                    self.post_event(LinkEvent::Resource(LinkResourcePacket {
+                        packet_type: PacketType::Proof,
+                        context: packet.context,
+                        payload: LinkPayload::new_from_slice(packet.data.as_slice()),
+                    }));
                 }
             }
             _ => {}
@@ -323,7 +373,43 @@ impl Link {
         return LinkHandleResult::None;
     }
 
+    pub fn context_packet(
+        &self,
+        context: PacketContext,
+        packet_type: PacketType,
+        payload: &[u8],
+    ) -> Result<Packet, RnsError> {
+        if payload.len() > PACKET_MDU {
+            return Err(RnsError::OutOfMemory);
+        }
+
+        let mut packet_data = PacketDataBuffer::new();
+        packet_data.safe_write(payload);
+
+        Ok(Packet {
+            header: Header {
+                destination_type: DestinationType::Link,
+                packet_type,
+                ..Default::default()
+            },
+            ifac: None,
+            destination: self.id,
+            transport: None,
+            context,
+            data: packet_data,
+        })
+    }
+
     pub fn data_packet(&self, data: &[u8]) -> Result<Packet, RnsError> {
+        self.encrypted_context_packet(PacketContext::None, PacketType::Data, data)
+    }
+
+    pub fn encrypted_context_packet(
+        &self,
+        context: PacketContext,
+        packet_type: PacketType,
+        payload: &[u8],
+    ) -> Result<Packet, RnsError> {
         if self.status != LinkStatus::Active {
             log::warn!("link: can't create data packet for closed link");
         }
@@ -331,7 +417,7 @@ impl Link {
         let mut packet_data = PacketDataBuffer::new();
 
         let cipher_text_len = {
-            let cipher_text = self.encrypt(data, packet_data.accuire_buf_max())?;
+            let cipher_text = self.encrypt(payload, packet_data.accuire_buf_max())?;
             cipher_text.len()
         };
 
@@ -340,13 +426,13 @@ impl Link {
         Ok(Packet {
             header: Header {
                 destination_type: DestinationType::Link,
-                packet_type: PacketType::Data,
+                packet_type,
                 ..Default::default()
             },
             ifac: None,
             destination: self.id,
             transport: None,
-            context: PacketContext::None,
+            context,
             data: packet_data,
         })
     }

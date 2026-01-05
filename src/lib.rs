@@ -9,7 +9,9 @@ pub mod hash;
 pub mod identity;
 pub mod iface;
 pub mod packet;
+pub mod resource;
+pub mod testing;
 pub mod transport;
 
-mod utils;
 mod serde;
+mod utils;
