@@ -27,7 +27,7 @@ use sha2::Sha256;
 /// # Examples
 ///
 /// ```
-/// use reticulum::crypto::hkdf;
+/// use reticulum::crypt::hkdf;
 ///
 /// // Derive a 32-byte key
 /// let ikm = b"input keying material";
