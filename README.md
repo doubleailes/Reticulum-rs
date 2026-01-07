@@ -13,6 +13,7 @@ This project brings Reticulum's capabilities to the Rust ecosystem, enabling emb
 - 🧱 Support for multiple transport layers (TCP, serial, Kaonic)
 - 🔌 Easily embeddable in embedded devices and tactical radios
 - 🧪 Example clients for testnets and real deployments
+- 🔑 Exposed cryptographic primitives (HKDF) for downstream use
 
 ## Structure
 
@@ -64,7 +65,33 @@ cargo run --example tcp_client
 
 # Kaonic mesh test client
 cargo run --example kaonic_client
+
+# HKDF cryptographic key derivation example
+cargo run --example hkdf_example
 ```
+
+## Cryptographic Primitives
+
+Reticulum-rs exposes cryptographic primitives that can be used by downstream crates like LXMF-rs:
+
+### HKDF (HMAC-based Key Derivation Function)
+
+The `hkdf` function provides SHA-256 based key derivation compatible with `RNS.Cryptography.hkdf`:
+
+```rust
+use reticulum::crypt::hkdf;
+
+let ikm = b"input keying material";
+let salt = b"optional salt";
+let info = b"application context";
+
+// Derive a 32-byte key
+let key = hkdf(32, ikm, Some(salt), Some(info));
+```
+
+This is used by LXMF for stamp workblock generation and other key derivation needs.
+
+See `examples/hkdf_example.rs` for more usage examples.
 
 ## Use Cases
 
