@@ -83,6 +83,7 @@ pub fn hkdf(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hex;
 
     #[test]
     fn test_hkdf_basic() {
