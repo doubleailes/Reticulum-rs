@@ -1076,8 +1076,115 @@ async fn handle_keepalive_response<'a>(
     false
 }
 
+async fn handle_path_request<'a>(
+    packet: &Packet,
+    handler: &MutexGuard<'a, TransportHandler>,
+) -> Option<Packet> {
+    // Path request packet data format: destination_hash (16 bytes) + transport_id_hash (16 bytes) + request_tag (32 bytes)
+    const PATH_REQUEST_MIN_SIZE: usize = crate::hash::ADDRESS_HASH_SIZE * 2 + HASH_SIZE;
+    
+    let data = packet.data.as_slice();
+    if data.len() < PATH_REQUEST_MIN_SIZE {
+        log::debug!(
+            "tp({}): dropping malformed path request (size: {})",
+            handler.config.name,
+            data.len()
+        );
+        return None;
+    }
+
+    // Extract requested destination hash
+    let mut dest_hash_bytes = [0u8; crate::hash::ADDRESS_HASH_SIZE];
+    dest_hash_bytes.copy_from_slice(&data[0..crate::hash::ADDRESS_HASH_SIZE]);
+    let requested_destination = AddressHash::new(dest_hash_bytes);
+
+    // Extract transport ID (requestor)
+    let mut transport_id_bytes = [0u8; crate::hash::ADDRESS_HASH_SIZE];
+    transport_id_bytes.copy_from_slice(
+        &data[crate::hash::ADDRESS_HASH_SIZE..(crate::hash::ADDRESS_HASH_SIZE * 2)],
+    );
+    let _requestor_transport_id = AddressHash::new(transport_id_bytes);
+
+    // Extract request tag
+    let mut tag_bytes = [0u8; HASH_SIZE];
+    tag_bytes.copy_from_slice(&data[(crate::hash::ADDRESS_HASH_SIZE * 2)..PATH_REQUEST_MIN_SIZE]);
+    let _request_tag = Hash::new(tag_bytes);
+
+    log::debug!(
+        "tp({}): received path request for destination {}",
+        handler.config.name,
+        requested_destination
+    );
+
+    // Check if we have this destination locally
+    if let Some(destination) = handler
+        .single_in_destinations
+        .get(&requested_destination)
+        .cloned()
+    {
+        log::info!(
+            "tp({}): responding to path request for known destination {}",
+            handler.config.name,
+            requested_destination
+        );
+
+        // Send an announce with PathResponse context
+        let mut destination = destination.lock().await;
+        if let Ok(mut announce_packet) = destination.announce(OsRng, None) {
+            // Set the context to PathResponse
+            announce_packet.context = PacketContext::PathResponse;
+            announce_packet.header.context_flag = ContextFlag::Set;
+            
+            drop(destination); // Release the lock before returning
+            
+            log::info!(
+                "tp({}): sending path response announce for {} with context {:?}",
+                handler.config.name,
+                requested_destination,
+                announce_packet.context
+            );
+            log::debug!(
+                "tp({}): path response packet: type={:?}, dest_type={:?}",
+                handler.config.name,
+                announce_packet.header.packet_type,
+                announce_packet.header.destination_type
+            );
+            
+            return Some(announce_packet);
+        }
+    } else {
+        log::trace!(
+            "tp({}): path request for unknown destination {}",
+            handler.config.name,
+            requested_destination
+        );
+    }
+    
+    None
+}
+
 async fn handle_data<'a>(packet: &Packet, mut handler: MutexGuard<'a, TransportHandler>) {
     let mut data_handled = false;
+
+    // Check for path request packets (Plain destination type to "rnstransport.path.request")
+    if packet.header.destination_type == DestinationType::Plain {
+        // Compute the path request destination hash
+        let path_request_name = DestinationName::new("rnstransport", "path.request");
+        let path_request_dest: PlainOutputDestination =
+            PlainOutputDestination::new(EmptyIdentity::new(), path_request_name);
+        let path_request_hash = path_request_dest.desc.address_hash;
+        
+        if packet.destination == path_request_hash {
+            if let Some(response_packet) = handle_path_request(packet, &handler).await {
+                // Send the path response announce
+                handler.send(TxMessage {
+                    tx_type: TxMessageType::Broadcast(None),
+                    packet: response_packet,
+                }).await;
+            }
+            return;
+        }
+    }
 
     if packet.header.destination_type == DestinationType::Link {
         if let Some(link) = handler.in_links.get(&packet.destination).cloned() {
@@ -1155,6 +1262,14 @@ async fn handle_announce<'a>(
     mut handler: MutexGuard<'a, TransportHandler>,
     iface: AddressHash,
 ) {
+    log::debug!(
+        "tp({}): handle_announce for {} context={:?} is_path_response={}",
+        handler.config.name,
+        packet.destination,
+        packet.context,
+        packet.context == PacketContext::PathResponse
+    );
+    
     if let Some(blocked_until) = handler.announce_limits.check(&packet.destination) {
         log::info!(
             "tp({}): too many announces from {}, blocked for {} seconds",
@@ -1236,13 +1351,29 @@ async fn handle_announce<'a>(
         }
 
         let full_name = destination.lock().await.desc.name.full_name();
-        let _ = handler.announce_tx.send(AnnounceEvent {
+        
+        log::debug!(
+            "tp({}): sending announce event for {} is_path_response={}",
+            handler.config.name,
+            dest_hash,
+            packet.context == PacketContext::PathResponse
+        );
+        
+        let send_result = handler.announce_tx.send(AnnounceEvent {
             destination,
             app_data: PacketDataBuffer::new_from_slice(app_data),
             full_name,
             // Path responses are announces with PathResponse context
             is_path_response: packet.context == PacketContext::PathResponse,
         });
+        
+        if let Err(e) = send_result {
+            log::warn!(
+                "tp({}): failed to send announce event (no receivers)",
+                handler.config.name
+            );
+            log::debug!("  announce event data: {:?}", e.0.full_name);
+        }
     }
 }
 
@@ -1511,6 +1642,13 @@ async fn manage_transport(
                             handler.send(TxMessage { tx_type: TxMessageType::Broadcast(Some(message.address)), packet }).await;
                         }
 
+                        log::debug!(
+                            "tp({}): routing packet type={:?} ctx={:?} to handler",
+                            handler.config.name,
+                            packet.header.packet_type,
+                            packet.context
+                        );
+
                         match packet.header.packet_type {
                             PacketType::Announce => handle_announce(
                                 &packet,
@@ -1548,6 +1686,14 @@ async fn manage_transport(
                     Ok(announce_event) = announce_rx.recv() => {
                         let dest_hash = announce_event.destination.lock().await.desc.address_hash;
                         let handlers = announce_handlers.lock().await;
+                        
+                        log::debug!(
+                            "Announce event: dest={} is_path_response={} full_name={}",
+                            dest_hash,
+                            announce_event.is_path_response,
+                            announce_event.full_name
+                        );
+                        
                         for handler in handlers.iter() {
                             if !handler.receive_path_responses() && announce_event.is_path_response {
                                  continue;
