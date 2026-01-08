@@ -62,6 +62,7 @@ pub use receipt::{PacketReceipt, PacketReceiptStatus};
 // TODO: Configure via features
 const PACKET_TRACE: bool = false;
 pub const PATHFINDER_M: usize = 128; // Max hops
+const PATH_REQUEST_MIN_SIZE: usize = crate::hash::ADDRESS_HASH_SIZE * 2 + HASH_SIZE;
 
 const INTERVAL_LINKS_CHECK: Duration = Duration::from_secs(1);
 const INTERVAL_INPUT_LINK_CLEANUP: Duration = Duration::from_secs(20);
@@ -1087,7 +1088,6 @@ async fn handle_path_request<'a>(
     handler: &MutexGuard<'a, TransportHandler>,
 ) -> Option<Packet> {
     // Path request packet data format: destination_hash (16 bytes) + transport_id_hash (16 bytes) + request_tag (32 bytes)
-    const PATH_REQUEST_MIN_SIZE: usize = crate::hash::ADDRESS_HASH_SIZE * 2 + HASH_SIZE;
     
     let data = packet.data.as_slice();
     if data.len() < PATH_REQUEST_MIN_SIZE {
@@ -1385,12 +1385,11 @@ async fn handle_announce<'a>(
             is_path_response: packet.context == PacketContext::PathResponse,
         });
         
-        if let Err(e) = send_result {
-            log::warn!(
-                "tp({}): failed to send announce event (no receivers)",
+        if let Err(_e) = send_result {
+            log::debug!(
+                "tp({}): failed to send announce event (channel may have no receivers)",
                 handler.config.name
             );
-            log::debug!("  announce event data: {:?}", e.0.full_name);
         }
     }
 }
