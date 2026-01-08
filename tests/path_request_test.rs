@@ -11,6 +11,7 @@ use tokio::sync::Mutex;
 use tokio::time::{sleep, Duration};
 
 async fn build_transport(name: &str, server_addr: &str, client_addr: &[&str]) -> Transport {
+    // Transport needs to be mutable for add_destination calls
     let transport = Transport::new(TransportConfig::new(
         name,
         &PrivateIdentity::new_from_rand(OsRng),
