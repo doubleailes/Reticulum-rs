@@ -1132,8 +1132,8 @@ async fn handle_path_request<'a>(
         let mut destination = destination.lock().await;
         if let Ok(mut announce_packet) = destination.announce(OsRng, None) {
             // Set the context to PathResponse
+            // NOTE: Do NOT modify context_flag - it indicates ratchet presence, not path response
             announce_packet.context = PacketContext::PathResponse;
-            announce_packet.header.context_flag = ContextFlag::Set;
             
             drop(destination); // Release the lock before returning
             
@@ -1288,6 +1288,12 @@ async fn handle_announce<'a>(
         ratchet,
     }) = DestinationAnnounce::validate(packet)
     {
+        log::debug!(
+            "tp({}): announce validated successfully for {}",
+            handler.config.name,
+            packet.destination
+        );
+        
         let dest_hash = destination.desc.address_hash;
         let existing_destination = handler
             .single_out_destinations
@@ -1350,13 +1356,19 @@ async fn handle_announce<'a>(
             }
         }
 
-        let full_name = destination.lock().await.desc.name.full_name();
+        // Get the full name - use existing destination's name if available, otherwise use the validated one
+        let full_name = if let Some(existing) = existing_destination.as_ref() {
+            existing.lock().await.desc.name.full_name()
+        } else {
+            destination.lock().await.desc.name.full_name()
+        };
         
         log::debug!(
-            "tp({}): sending announce event for {} is_path_response={}",
+            "tp({}): sending announce event for {} is_path_response={} full_name={}",
             handler.config.name,
             dest_hash,
-            packet.context == PacketContext::PathResponse
+            packet.context == PacketContext::PathResponse,
+            full_name
         );
         
         let send_result = handler.announce_tx.send(AnnounceEvent {
