@@ -1,5 +1,7 @@
+#[cfg(feature = "proto")]
 use kaonic_grpc::proto::ConfigurationRequest;
 
+#[cfg(feature = "proto")]
 pub mod kaonic_grpc;
 
 pub const RADIO_FRAME_MAX_SIZE: usize = 2048usize;
@@ -10,8 +12,10 @@ pub enum RadioModule {
     RadioB = 0x01,
 }
 
+#[cfg(feature = "proto")]
 pub type RadioConfig = ConfigurationRequest;
 
+#[cfg(feature = "proto")]
 impl RadioConfig {
     pub fn new_for_module(module: RadioModule) -> Self {
         Self {
