@@ -237,6 +237,7 @@ struct TransportHandler {
     cancel: CancellationToken,
 }
 
+#[derive(Clone)]
 pub struct Transport {
     name: String,
     link_in_event_tx: broadcast::Sender<LinkEventData>,
@@ -567,7 +568,7 @@ impl Transport {
             }
         }
 
-        let mut link = Link::new(destination, self.link_out_event_tx.clone());
+        let mut link = Link::new(destination.clone(), self.link_out_event_tx.clone());
 
         let packet = link.request();
 
@@ -1240,13 +1241,13 @@ async fn handle_announce<'a>(
             }
         }
 
+        let full_name = destination.lock().await.desc.name.full_name();
         let _ = handler.announce_tx.send(AnnounceEvent {
             destination,
             app_data: PacketDataBuffer::new_from_slice(app_data),
-            // TODO: Extract full_name from packet or destination metadata
-            full_name: String::new(),
-            // TODO: Determine if this is a path response from packet flags
-            is_path_response: false,
+            full_name,
+            // Path responses are announces with PathResponse context
+            is_path_response: packet.context == PacketContext::PathResponse,
         });
     }
 }
@@ -1270,7 +1271,7 @@ async fn handle_link_request_as_destination<'a>(
                 let link = Link::new_from_request(
                     packet,
                     destination.sign_key().clone(),
-                    destination.desc,
+                    destination.desc.clone(),
                     handler.link_in_event_tx.clone(),
                 );
 
