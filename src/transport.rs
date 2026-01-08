@@ -139,6 +139,7 @@ pub struct Transport {
     handler: Arc<Mutex<TransportHandler>>,
     iface_manager: Arc<Mutex<InterfaceManager>>,
     cancel: CancellationToken,
+    announce_handlers: Arc<Mutex<Vec<Arc<dyn Fn(Arc<Mutex<SingleOutputDestination>>, PacketDataBuffer) + Send + Sync>>>>,
 }
 
 impl TransportConfig {
@@ -207,6 +208,8 @@ impl Transport {
             cancel: cancel.clone(),
         }));
 
+        let announce_handlers = Arc::new(Mutex::new(Vec::new()));
+
         {
             let handler = handler.clone();
             tokio::spawn(manage_transport(
@@ -225,7 +228,17 @@ impl Transport {
             iface_messages_tx,
             handler,
             cancel,
+            announce_handlers,
         }
+    }
+
+    /// Register a handler for announce events. The handler will be called with the destination and app_data.
+    pub async fn register_announce_handler<F>(&self, handler: F)
+    where
+        F: Fn(Arc<Mutex<SingleOutputDestination>>, PacketDataBuffer) + Send + Sync + 'static,
+    {
+        let mut handlers = self.announce_handlers.lock().await;
+        handlers.push(Arc::new(handler));
     }
 
     pub async fn outbound(&self, packet: &Packet) {
