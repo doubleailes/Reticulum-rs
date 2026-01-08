@@ -1538,8 +1538,21 @@ async fn manage_transport(
                     break;
                 }
 
-                tokio::select! {
-                    _ = cancel.cancelled() => {
+                        for handler in handlers.iter() {
+                            // Filter path responses
+                            if !handler.receive_path_responses() && announce_event.is_path_response {
+                                continue;
+                            }
+
+                            // Filter by aspect
+                            if let Some(aspect) = handler.aspect_filter() {
+                                if announce_event.full_name.split_once('.').map_or(true, |(_, a)| a != aspect) {
+                                    continue;
+                                }
+                            }
+
+                            // Custom filter
+                            if handler.should_handle(&dest_hash) {
                         break;
                     },
                     Ok(announce_event) = announce_rx.recv() => {
