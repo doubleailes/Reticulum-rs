@@ -1,5 +1,6 @@
 use rand_core::OsRng;
 use reticulum::destination::DestinationName;
+use reticulum::destination::SingleOutputDestination;
 use reticulum::hash::AddressHash;
 use reticulum::identity::PrivateIdentity;
 use reticulum::iface::tcp_client::TcpClient;
@@ -8,7 +9,6 @@ use reticulum::transport::{AnnounceHandler, Transport, TransportConfig};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::time::{sleep, Duration};
-use reticulum::destination::SingleOutputDestination;
 
 // Example 1: Handler with aspect filter (like LXMF delivery handler)
 struct LXMFDeliveryHandler {
@@ -17,33 +17,27 @@ struct LXMFDeliveryHandler {
 
 impl LXMFDeliveryHandler {
     fn new(name: impl Into<String>) -> Self {
-        Self {
-            name: name.into(),
-        }
+        Self { name: name.into() }
     }
 }
 
 impl AnnounceHandler for LXMFDeliveryHandler {
     fn aspect_filter(&self) -> Option<&str> {
-        Some("delivery")  // Only receive "*.delivery" announces
+        Some("delivery") // Only receive "*.delivery" announces
     }
-    
+
     fn handle_announce(
         &self,
         destination: Arc<Mutex<SingleOutputDestination>>,
         app_data: PacketDataBuffer,
     ) {
         let name = self.name.clone();
-        
+
         tokio::spawn(async move {
             let dest = destination.lock().await;
             let dest_hash = dest.desc.address_hash;
-            
-            log::info!(
-                "[{}] 📬 Delivery announce from: {}",
-                name,
-                dest_hash
-            );
+
+            log::info!("[{}] 📬 Delivery announce from: {}", name, dest_hash);
             log::info!(
                 "   App data: {}",
                 String::from_utf8_lossy(app_data.as_slice())
@@ -59,37 +53,31 @@ struct LXMFPropagationHandler {
 
 impl LXMFPropagationHandler {
     fn new(name: impl Into<String>) -> Self {
-        Self {
-            name: name.into(),
-        }
+        Self { name: name.into() }
     }
 }
 
 impl AnnounceHandler for LXMFPropagationHandler {
     fn aspect_filter(&self) -> Option<&str> {
-        Some("propagation")  // Only receive "*.propagation" announces
+        Some("propagation") // Only receive "*.propagation" announces
     }
-    
+
     fn receive_path_responses(&self) -> bool {
-        true  // Accept path responses
+        true // Accept path responses
     }
-    
+
     fn handle_announce(
         &self,
         destination: Arc<Mutex<SingleOutputDestination>>,
         app_data: PacketDataBuffer,
     ) {
         let name = self.name.clone();
-        
+
         tokio::spawn(async move {
             let dest = destination.lock().await;
             let dest_hash = dest.desc.address_hash;
-            
-            log::info!(
-                "[{}] 🌐 Propagation announce from: {}",
-                name,
-                dest_hash
-            );
+
+            log::info!("[{}] 🌐 Propagation announce from: {}", name, dest_hash);
             log::info!(
                 "   App data: {}",
                 String::from_utf8_lossy(app_data.as_slice())
@@ -121,27 +109,22 @@ impl AnnounceHandler for StatsAnnounceHandler {
     ) {
         let name = self.name.clone();
         let count = self.count.clone();
-        
+
         tokio::spawn(async move {
             let mut counter = count.lock().await;
             *counter += 1;
-            
+
             let dest = destination.lock().await;
             let dest_hash = dest.desc.address_hash;
-            
-            log::info!(
-                "[{}] 📊 Announce #{} from: {}",
-                name,
-                counter,
-                dest_hash
-            );
+
+            log::info!("[{}] 📊 Announce #{} from: {}", name, counter, dest_hash);
             log::info!(
                 "   App data: {}",
                 String::from_utf8_lossy(app_data.as_slice())
             );
         });
     }
-    
+
     fn should_handle(&self, _destination_hash: &AddressHash) -> bool {
         // This handler processes all announces
         true
@@ -167,7 +150,9 @@ async fn main() {
 
     // Example 2: Register LXMF propagation handler (aspect: "propagation")
     let propagation_handler = LXMFPropagationHandler::new("PropagationHandler");
-    transport.register_announce_handler(propagation_handler).await;
+    transport
+        .register_announce_handler(propagation_handler)
+        .await;
 
     // Example 3: Register stats handler (no aspect filter - receives all)
     let stats_handler = StatsAnnounceHandler::new("StatsHandler");
@@ -176,8 +161,7 @@ async fn main() {
     // Example 4: Register a simple closure handler
     transport
         .register_announce_handler(
-            |destination: Arc<Mutex<SingleOutputDestination>>, 
-             app_data: PacketDataBuffer| {
+            |destination: Arc<Mutex<SingleOutputDestination>>, app_data: PacketDataBuffer| {
                 tokio::spawn(async move {
                     let dest = destination.lock().await;
                     let dest_hash = dest.desc.address_hash;
@@ -187,7 +171,7 @@ async fn main() {
                         String::from_utf8_lossy(app_data.as_slice())
                     );
                 });
-            }
+            },
         )
         .await;
 
@@ -202,29 +186,33 @@ async fn main() {
         let mut transport = transport;
         async move {
             let identity = PrivateIdentity::new_from_rand(OsRng);
-            
+
             // Create a delivery destination
             let delivery_dest_name = DestinationName::new("lxmf", "delivery");
-            let delivery_dest = transport.add_destination(identity.clone(), delivery_dest_name).await;
+            let delivery_dest = transport
+                .add_destination(identity.clone(), delivery_dest_name)
+                .await;
             let delivery_hash = delivery_dest.lock().await.desc.address_hash;
             log::info!("Created delivery destination: {}", delivery_hash);
-            
+
             // Create a propagation destination
             let prop_dest_name = DestinationName::new("lxmf", "propagation");
-            let prop_dest = transport.add_destination(PrivateIdentity::new_from_rand(OsRng), prop_dest_name).await;
+            let prop_dest = transport
+                .add_destination(PrivateIdentity::new_from_rand(OsRng), prop_dest_name)
+                .await;
             let prop_hash = prop_dest.lock().await.desc.address_hash;
             log::info!("Created propagation destination: {}", prop_hash);
 
             loop {
                 sleep(Duration::from_secs(30)).await;
-                
+
                 log::info!("Sending delivery announce...");
                 transport
                     .send_announce(&delivery_dest, Some(b"Delivery node ready"))
                     .await;
-                
+
                 sleep(Duration::from_secs(5)).await;
-                
+
                 log::info!("Sending propagation announce...");
                 transport
                     .send_announce(&prop_dest, Some(b"Propagation node active"))
