@@ -49,12 +49,36 @@ Reticulum-rs/
 ### Prerequisites
 
 * Rust (edition 2021+)
-* `protoc` for compiling `.proto` files (if using gRPC/Kaonic modules)
+* `protoc` (Protocol Buffers compiler) - **only required when using the `proto` feature** for Kaonic modules
+  * Debian/Ubuntu: `apt-get install protobuf-compiler`
+  * Or download from: https://github.com/protocolbuffers/protobuf/releases
 
 ### Build
 
 ```bash
+# Build with default features (no Protobuf/gRPC)
 cargo build --release
+
+# Build with Protobuf/gRPC support for Kaonic
+cargo build --release --features proto
+```
+
+## Features
+
+The crate supports the following Cargo features:
+
+- **`alloc`** (enabled by default): Enable allocator support
+- **`proto`** (disabled by default): Enable Protobuf/gRPC support for Kaonic radio modules
+  - Requires `protoc` to be installed
+  - Enables `prost`, `tonic`, and related dependencies
+- **`fernet-aes128`**: Enable Fernet encryption with AES-128
+- **`python-interop`**: Enable Python interoperability features
+
+To use Protobuf support (e.g., for Kaonic examples), add this to your `Cargo.toml`:
+
+```toml
+[dependencies]
+reticulum = { version = "0.1", features = ["proto"] }
 ```
 
 ### Run Examples
@@ -63,8 +87,8 @@ cargo build --release
 # TCP client example
 cargo run --example tcp_client
 
-# Kaonic mesh test client
-cargo run --example kaonic_client
+# Kaonic mesh test client (requires proto feature)
+cargo run --example kaonic_client --features proto
 
 # HKDF cryptographic key derivation example
 cargo run --example hkdf_example
