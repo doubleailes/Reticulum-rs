@@ -1,6 +1,6 @@
 use rand_core::OsRng;
 use reticulum::{
-    destination::{DestinationName, SingleInputDestination},
+    destination::DestinationName,
     identity::PrivateIdentity,
     iface::{tcp_client::TcpClient, tcp_server::TcpServer},
     packet::PacketDataBuffer,
@@ -38,7 +38,6 @@ async fn build_transport(name: &str, server_addr: &str, client_addr: &[&str]) ->
 // Test handler that tracks announces
 struct TestAnnounceHandler {
     received_count: Arc<Mutex<usize>>,
-    path_response_count: Arc<Mutex<usize>>,
     aspect_filter: Option<String>,
 }
 
@@ -46,15 +45,8 @@ impl TestAnnounceHandler {
     fn new(aspect_filter: Option<&str>) -> Self {
         Self {
             received_count: Arc::new(Mutex::new(0)),
-            path_response_count: Arc::new(Mutex::new(0)),
             aspect_filter: aspect_filter.map(|s| s.to_string()),
         }
-    }
-
-    async fn get_counts(&self) -> (usize, usize) {
-        let total = *self.received_count.lock().await;
-        let path_responses = *self.path_response_count.lock().await;
-        (total, path_responses)
     }
 }
 
@@ -65,7 +57,6 @@ impl AnnounceHandler for TestAnnounceHandler {
         app_data: PacketDataBuffer,
     ) {
         let received_count = self.received_count.clone();
-        let path_response_count = self.path_response_count.clone();
         
         tokio::spawn(async move {
             let dest = destination.lock().await;
@@ -122,7 +113,7 @@ async fn test_path_request_response() {
 
     // Register an announce handler on transport B
     let handler = TestAnnounceHandler::new(None);
-    let handler_counts = (handler.received_count.clone(), handler.path_response_count.clone());
+    let handler_counts = handler.received_count.clone();
     transport_b.register_announce_handler(handler).await;
 
     // Send a regular announce from transport A
@@ -133,7 +124,7 @@ async fn test_path_request_response() {
     sleep(Duration::from_secs(2)).await;
 
     // Check that the handler was called
-    let regular_count = *handler_counts.0.lock().await;
+    let regular_count = *handler_counts.lock().await;
     log::info!("Handler received {} regular announces", regular_count);
     assert!(regular_count > 0, "Handler should receive regular announce");
 
@@ -145,7 +136,7 @@ async fn test_path_request_response() {
     sleep(Duration::from_secs(2)).await;
 
     // Check that the handler was called again for the path response
-    let total_count = *handler_counts.0.lock().await;
+    let total_count = *handler_counts.lock().await;
     log::info!("Handler received {} total announces", total_count);
     
     // We should have received at least 2 announces: the regular one and the path response
@@ -159,8 +150,10 @@ async fn test_path_request_response() {
 }
 
 #[tokio::test]
-async fn test_path_request_response_with_aspect_filter() {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+async fn test_path_request_response_with_multiple_destinations() {
+    let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .is_test(true)
+        .try_init();
 
     // Create two transports connected via TCP
     let mut transport_a = build_transport("a", "127.0.0.1:9093", &[]).await;
@@ -169,48 +162,48 @@ async fn test_path_request_response_with_aspect_filter() {
     // Wait for connection to establish
     sleep(Duration::from_secs(1)).await;
 
-    // Create destinations with different aspects on transport A
+    // Create multiple destinations with different aspects on transport A
     let identity_a = PrivateIdentity::new_from_rand(OsRng);
-    let delivery_dest_name = DestinationName::new("lxmf", "delivery");
-    let delivery_dest = transport_a
-        .add_destination(identity_a.clone(), delivery_dest_name)
+    let dest1_name = DestinationName::new("test", "destination1");
+    let dest1 = transport_a
+        .add_destination(identity_a.clone(), dest1_name)
         .await;
-    let delivery_hash = delivery_dest.lock().await.desc.address_hash;
+    let dest1_hash = dest1.lock().await.desc.address_hash;
 
-    let propagation_dest_name = DestinationName::new("lxmf", "propagation");
-    let propagation_dest = transport_a
-        .add_destination(PrivateIdentity::new_from_rand(OsRng), propagation_dest_name)
+    let dest2_name = DestinationName::new("test", "destination2");
+    let dest2 = transport_a
+        .add_destination(PrivateIdentity::new_from_rand(OsRng), dest2_name)
         .await;
-    let propagation_hash = propagation_dest.lock().await.desc.address_hash;
+    let dest2_hash = dest2.lock().await.desc.address_hash;
 
-    log::info!("Created delivery destination: {}", delivery_hash);
-    log::info!("Created propagation destination: {}", propagation_hash);
+    log::info!("Created destination 1: {}", dest1_hash);
+    log::info!("Created destination 2: {}", dest2_hash);
 
-    // Register an announce handler on transport B that only accepts "delivery" aspects
-    let delivery_handler = TestAnnounceHandler::new(Some("delivery"));
-    let delivery_counts = (delivery_handler.received_count.clone(), delivery_handler.path_response_count.clone());
-    transport_b.register_announce_handler(delivery_handler).await;
+    // Register an announce handler on transport B (no aspect filter)
+    let handler = TestAnnounceHandler::new(None);
+    let counts = handler.received_count.clone();
+    transport_b.register_announce_handler(handler).await;
 
-    // Request paths from transport B
-    log::info!("Requesting path to delivery destination");
-    transport_b.request_path(&delivery_hash, None).await;
+    // Request paths from transport B (without sending regular announces first)
+    log::info!("Requesting path to destination 1");
+    transport_b.request_path(&dest1_hash, None).await;
 
     sleep(Duration::from_secs(1)).await;
 
-    log::info!("Requesting path to propagation destination");
-    transport_b.request_path(&propagation_hash, None).await;
+    log::info!("Requesting path to destination 2");
+    transport_b.request_path(&dest2_hash, None).await;
 
     // Wait for responses
     sleep(Duration::from_secs(2)).await;
 
-    // Check that only the delivery announce was received
-    let delivery_count = *delivery_counts.0.lock().await;
-    log::info!("Delivery handler received {} announces", delivery_count);
+    // Check that both path response announces were received
+    let total_count = *counts.lock().await;
+    log::info!("Handler received {} announces total", total_count);
     
     assert!(
-        delivery_count >= 1,
-        "Handler with 'delivery' aspect filter should receive delivery announces"
+        total_count >= 2,
+        "Handler should receive path response announces for both destinations"
     );
 
-    log::info!("Aspect filter test completed successfully!");
+    log::info!("Multiple destination path request test completed successfully!");
 }
