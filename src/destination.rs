@@ -96,12 +96,14 @@ impl DestinationName {
     pub fn as_name_hash_slice(&self) -> &[u8] {
         &self.hash.as_slice()[..NAME_HASH_LENGTH]
     }
-    
+
     /// Get the aspect string from the destination name.
     /// Returns the part after the first dot (e.g., "delivery" from "lxmf.delivery").
     /// Returns None if the name doesn't contain a dot.
     pub fn aspect(&self, full_name: &str) -> Option<String> {
-        full_name.split_once('.').map(|(_, aspect)| aspect.to_string())
+        full_name
+            .split_once('.')
+            .map(|(_, aspect)| aspect.to_string())
     }
 }
 
