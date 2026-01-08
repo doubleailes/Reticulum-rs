@@ -1,10 +1,12 @@
 use rand_core::OsRng;
+use std::sync::Arc;
 
-use reticulum::destination::link::LinkEvent;
-use reticulum::destination::{DestinationAnnounce, DestinationName};
+use reticulum::destination::{DestinationName, SingleOutputDestination};
 use reticulum::identity::PrivateIdentity;
 use reticulum::iface::tcp_client::TcpClient;
+use reticulum::packet::PacketDataBuffer;
 use reticulum::transport::{Transport, TransportConfig};
+use tokio::sync::Mutex;
 
 #[tokio::main]
 async fn main() {
@@ -34,20 +36,24 @@ async fn main() {
     let packet = in_destination.lock().await.announce(OsRng, None).unwrap();
     let _ = transport.send_packet(packet).await;
 
-    tokio::spawn(async move {
-        let recv = transport.recv_announces();
-        let mut recv = recv.await;
-        loop {
-            if let Ok(announce) = recv.recv().await {
-                log::debug!(
-                    "destination announce {}",
-                    announce.destination.lock().await.desc.address_hash
-                );
+    // Register announce handler to automatically establish links
+    let transport_clone = transport.clone();
+    transport
+        .register_announce_handler(
+            move |destination: Arc<Mutex<SingleOutputDestination>>, _app_data: PacketDataBuffer| {
+                let transport = transport_clone.clone();
+                tokio::spawn(async move {
+                    let dest = destination.lock().await;
+                    let dest_hash = dest.desc.address_hash;
+                    let full_name = dest.desc.name.full_name();
 
-                let _link = transport.link(announce.destination.lock().await.desc).await;
-            }
-        }
-    });
+                    log::debug!("destination announce {} ({})", dest_hash, full_name);
+
+                    let _link = transport.link(dest.desc.clone()).await;
+                });
+            },
+        )
+        .await;
 
     let _ = tokio::signal::ctrl_c().await;
 }

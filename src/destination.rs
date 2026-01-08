@@ -65,9 +65,11 @@ pub const MIN_ANNOUNCE_DATA_LENGTH: usize =
 const DEFAULT_RATCHET_INTERVAL_SECS: u64 = 30 * 60;
 const DEFAULT_RATCHET_RETENTION: usize = 512;
 
-#[derive(Copy, Clone)]
+#[derive(Clone)]
 pub struct DestinationName {
     pub hash: Hash,
+    app_name: alloc::string::String,
+    aspect: alloc::string::String,
 }
 
 impl DestinationName {
@@ -81,7 +83,11 @@ impl DestinationName {
                 .into(),
         );
 
-        Self { hash }
+        Self {
+            hash,
+            app_name: app_name.into(),
+            aspect: aspects.into(),
+        }
     }
 
     pub fn new_from_hash_slice(hash_slice: &[u8]) -> Self {
@@ -90,6 +96,8 @@ impl DestinationName {
 
         Self {
             hash: Hash::new(hash),
+            app_name: alloc::string::String::new(),
+            aspect: alloc::string::String::new(),
         }
     }
 
@@ -97,17 +105,32 @@ impl DestinationName {
         &self.hash.as_slice()[..NAME_HASH_LENGTH]
     }
 
+    /// Get the full destination name as "app_name.aspect".
+    /// Returns an empty string if the name was created from a hash slice.
+    pub fn full_name(&self) -> alloc::string::String {
+        if self.app_name.is_empty() {
+            alloc::string::String::new()
+        } else {
+            alloc::format!("{}.{}", self.app_name, self.aspect)
+        }
+    }
+
     /// Get the aspect string from the destination name.
-    /// Returns the part after the first dot (e.g., "delivery" from "lxmf.delivery").
-    /// Returns None if the name doesn't contain a dot.
-    pub fn aspect(&self, full_name: &str) -> Option<String> {
-        full_name
-            .split_once('.')
-            .map(|(_, aspect)| aspect.to_string())
+    /// Returns the aspect part (e.g., "delivery" from "lxmf.delivery").
+    /// Returns an empty string if the name was created from a hash slice.
+    pub fn aspect(&self) -> &str {
+        &self.aspect
+    }
+
+    /// Get the app name from the destination name.
+    /// Returns the app_name part (e.g., "lxmf" from "lxmf.delivery").
+    /// Returns an empty string if the name was created from a hash slice.
+    pub fn app_name(&self) -> &str {
+        &self.app_name
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Clone)]
 pub struct DestinationDesc {
     pub identity: Identity,
     pub address_hash: AddressHash,

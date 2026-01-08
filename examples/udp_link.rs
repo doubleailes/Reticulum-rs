@@ -16,11 +16,13 @@ use std::time::Duration;
 
 use rand_core::OsRng;
 use reticulum::destination::link::{Link, LinkEvent, LinkStatus};
-use reticulum::destination::{DestinationName, SingleInputDestination};
+use reticulum::destination::{DestinationName, SingleInputDestination, SingleOutputDestination};
 use reticulum::hash::AddressHash;
 use reticulum::identity::PrivateIdentity;
 use reticulum::iface::udp::UdpInterface;
+use reticulum::packet::PacketDataBuffer;
 use reticulum::transport::{Transport, TransportConfig};
+use tokio::sync::Mutex;
 
 #[tokio::main]
 async fn main() {
@@ -40,30 +42,54 @@ async fn main() {
 
     let dest = Arc::new(tokio::sync::Mutex::new(destination));
 
-    let mut announce_recv = transport.recv_announces().await;
     let mut out_link_events = transport.out_link_events();
 
-    let mut links = HashMap::<AddressHash, Arc<tokio::sync::Mutex<Link>>>::new();
+    let links = Arc::new(Mutex::new(HashMap::<
+        AddressHash,
+        Arc<tokio::sync::Mutex<Link>>,
+    >::new()));
+
+    // Register announce handler to automatically establish links
+    {
+        let transport_clone = transport.clone();
+        let links_clone = links.clone();
+        transport
+            .register_announce_handler(
+                move |destination: Arc<Mutex<SingleOutputDestination>>,
+                      _app_data: PacketDataBuffer| {
+                    let transport = transport_clone.clone();
+                    let links = links_clone.clone();
+                    tokio::spawn(async move {
+                        let dest = destination.lock().await;
+                        let dest_hash = dest.desc.address_hash;
+                        let full_name = dest.desc.name.full_name();
+
+                        log::debug!("Received announce from {} ({})", dest_hash, full_name);
+
+                        let mut links_guard = links.lock().await;
+                        let link = match links_guard.get(&dest_hash) {
+                            Some(link) => link.clone(),
+                            None => {
+                                let link = transport.link(dest.desc.clone()).await;
+                                links_guard.insert(dest_hash, link.clone());
+                                link
+                            }
+                        };
+                        drop(links_guard);
+
+                        let link = link.lock().await;
+                        log::info!("link {}: {:?}", link.id(), link.status());
+                        if link.status() == LinkStatus::Active {
+                            let packet = link.data_packet(b"foo").unwrap();
+                            let _ = transport.send_packet(packet).await;
+                        }
+                    });
+                },
+            )
+            .await;
+    }
 
     loop {
-        while let Ok(announce) = announce_recv.try_recv() {
-            let destination = announce.destination.lock().await;
-            //println!("ANNOUNCE: {}", destination.desc.address_hash);
-            let link = match links.get(&destination.desc.address_hash) {
-                Some(link) => link.clone(),
-                None => {
-                    let link = transport.link(destination.desc).await;
-                    links.insert(destination.desc.address_hash, link.clone());
-                    link
-                }
-            };
-            let link = link.lock().await;
-            log::info!("link {}: {:?}", link.id(), link.status());
-            if link.status() == LinkStatus::Active {
-                let packet = link.data_packet(b"foo").unwrap();
-                let _ = transport.send_packet(packet).await;
-            }
-        }
         while let Ok(link_event) = out_link_events.try_recv() {
             match link_event.event {
                 LinkEvent::Activated => log::info!("link {} activated", link_event.id),
