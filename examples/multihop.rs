@@ -48,7 +48,8 @@ async fn main() {
     let last_hop_id = PrivateIdentity::new_from_name("last_hop");
     let last_hop_name = DestinationName::new("last_hop", "app");
 
-    let last_hop_destination = SingleInputDestination::new(last_hop_id.clone(), last_hop_name);
+    let last_hop_destination =
+        SingleInputDestination::new(last_hop_id.clone(), last_hop_name.clone());
     let last_hop_address = last_hop_destination.desc.address_hash.clone();
 
     log::info!(
@@ -161,7 +162,7 @@ async fn main() {
                     if link.is_none() && message == "link" {
                         log::info!("Requesting link to last hop");
 
-                        link = Some(transport.link(last_hop_destination.desc).await);
+                        link = Some(transport.link(last_hop_destination.desc.clone()).await);
                         continue;
                     }
 
