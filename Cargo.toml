@@ -7,6 +7,7 @@ readme = "README.md"
 repository = "https://github.com/BeechatNetworkSystemsLtd/Reticulum-rs"
 categories = ["network-programming"]
 keywords = ["reticulum", "mesh", "radio", "async"]
+rust-version = "1.90"
 
 description = """
 Reticulum-rs is a Rust implementation of the Reticulum Network Stack - a cryptographic, 
@@ -39,7 +40,7 @@ sha2 = "0.10.8"
 rand_core = { version = "0.6.4", features = ["getrandom"] }
 
 # Async IO
-tokio = { version = "1.44.2", features = ["full"] }
+tokio = { version = "1.49.0", features = ["full"] }
 tokio-stream = "0.1.17"
 tokio-util = "0.7.15"
 
