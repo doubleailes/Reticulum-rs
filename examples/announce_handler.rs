@@ -36,8 +36,14 @@ impl AnnounceHandler for LXMFDeliveryHandler {
         tokio::spawn(async move {
             let dest = destination.lock().await;
             let dest_hash = dest.desc.address_hash;
+            let full_name = dest.desc.name.full_name();
 
-            log::info!("[{}] 📬 Delivery announce from: {}", name, dest_hash);
+            log::info!(
+                "[{}] 📬 Delivery announce from: {} ({})",
+                name,
+                dest_hash,
+                full_name
+            );
             log::info!(
                 "   App data: {}",
                 String::from_utf8_lossy(app_data.as_slice())
@@ -76,8 +82,14 @@ impl AnnounceHandler for LXMFPropagationHandler {
         tokio::spawn(async move {
             let dest = destination.lock().await;
             let dest_hash = dest.desc.address_hash;
+            let full_name = dest.desc.name.full_name();
 
-            log::info!("[{}] 🌐 Propagation announce from: {}", name, dest_hash);
+            log::info!(
+                "[{}] 🌐 Propagation announce from: {} ({})",
+                name,
+                dest_hash,
+                full_name
+            );
             log::info!(
                 "   App data: {}",
                 String::from_utf8_lossy(app_data.as_slice())
@@ -116,8 +128,15 @@ impl AnnounceHandler for StatsAnnounceHandler {
 
             let dest = destination.lock().await;
             let dest_hash = dest.desc.address_hash;
+            let full_name = dest.desc.name.full_name();
 
-            log::info!("[{}] 📊 Announce #{} from: {}", name, counter, dest_hash);
+            log::info!(
+                "[{}] 📊 Announce #{} from: {} ({})",
+                name,
+                counter,
+                dest_hash,
+                full_name
+            );
             log::info!(
                 "   App data: {}",
                 String::from_utf8_lossy(app_data.as_slice())
@@ -165,7 +184,12 @@ async fn main() {
                 tokio::spawn(async move {
                     let dest = destination.lock().await;
                     let dest_hash = dest.desc.address_hash;
-                    log::info!("📢 [ClosureHandler] Received announce from: {}", dest_hash);
+                    let full_name = dest.desc.name.full_name();
+                    log::info!(
+                        "📢 [ClosureHandler] Received announce from: {} ({})",
+                        dest_hash,
+                        full_name
+                    );
                     log::info!(
                         "   App data: {}",
                         String::from_utf8_lossy(app_data.as_slice())
