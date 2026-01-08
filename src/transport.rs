@@ -103,6 +103,111 @@ pub struct AnnounceEvent {
     pub app_data: PacketDataBuffer,
 }
 
+/// Trait for handling announce events.
+/// 
+/// Implement this trait to create custom announce handlers with state and complex logic.
+/// Simple closures are also supported via a blanket implementation.
+/// 
+/// # Filtering
+/// 
+/// Handlers can filter announces by:
+/// - **Aspect**: Only receive announces matching a specific aspect (e.g., "lxmf.delivery")
+/// - **Path responses**: Choose whether to receive path response announces
+/// - **Custom logic**: Use `should_handle()` for additional filtering
+/// 
+/// # Example
+/// 
+/// ```ignore
+/// struct LXMFDeliveryHandler {
+///     router: Arc<LXMRouter>,
+/// }
+/// 
+/// impl AnnounceHandler for LXMFDeliveryHandler {
+///     fn aspect_filter(&self) -> Option<&str> {
+///         Some("lxmf.delivery")
+///     }
+///     
+///     fn handle_announce(&self, destination: Arc<Mutex<SingleOutputDestination>>, app_data: PacketDataBuffer) {
+///         // Handle delivery node announces
+///     }
+/// }
+/// ```
+pub trait AnnounceHandler: Send + Sync {
+    /// Called when an announce is received and passes all filters.
+    /// 
+    /// # Arguments
+    /// 
+    /// * `destination` - The destination that sent the announce
+    /// * `app_data` - Application-specific data included in the announce
+    fn handle_announce(
+        &self,
+        destination: Arc<Mutex<SingleOutputDestination>>,
+        app_data: PacketDataBuffer,
+    );
+    
+    /// Optional aspect filter to only receive announces from destinations with a specific aspect.
+    /// 
+    /// When set, only announces from destinations whose aspect matches this filter will be processed.
+    /// The aspect is the second part of the destination name (e.g., "delivery" in "lxmf.delivery").
+    /// 
+    /// # Returns
+    /// 
+    /// * `Some(aspect)` - Only process announces matching this aspect
+    /// * `None` - Process announces from all aspects (default)
+    /// 
+    /// # Example
+    /// 
+    /// ```ignore
+    /// fn aspect_filter(&self) -> Option<&str> {
+    ///     Some("lxmf.delivery")
+    /// }
+    /// ```
+    fn aspect_filter(&self) -> Option<&str> {
+        None
+    }
+    
+    /// Whether this handler wants to receive path response announces.
+    /// 
+    /// Path responses are announces sent in response to path requests.
+    /// Some handlers may want to ignore these to avoid duplicate processing.
+    /// 
+    /// # Returns
+    /// 
+    /// * `true` - Receive path response announces (default)
+    /// * `false` - Ignore path response announces
+    fn receive_path_responses(&self) -> bool {
+        true
+    }
+    
+    /// Optional filter to decide whether to process an announce based on custom logic.
+    /// 
+    /// This is called after aspect and path response filtering.
+    /// Return `false` to skip processing this announce.
+    /// 
+    /// Default implementation accepts all announces.
+    /// 
+    /// # Arguments
+    /// 
+    /// * `destination_hash` - The hash of the destination that sent the announce
+    fn should_handle(&self, _destination_hash: &AddressHash) -> bool {
+        true
+    }
+}
+
+// Blanket implementation for closures to maintain backward compatibility
+impl<F> AnnounceHandler for F
+where
+    F: Fn(Arc<Mutex<SingleOutputDestination>>, PacketDataBuffer) + Send + Sync,
+{
+    fn handle_announce(
+        &self,
+        destination: Arc<Mutex<SingleOutputDestination>>,
+        app_data: PacketDataBuffer,
+    ) {
+        self(destination, app_data)
+    }
+}
+
 struct TransportHandler {
     config: TransportConfig,
     iface_manager: Arc<Mutex<InterfaceManager>>,
@@ -139,7 +244,7 @@ pub struct Transport {
     handler: Arc<Mutex<TransportHandler>>,
     iface_manager: Arc<Mutex<InterfaceManager>>,
     cancel: CancellationToken,
-    announce_handlers: Arc<Mutex<Vec<Arc<dyn Fn(Arc<Mutex<SingleOutputDestination>>, PacketDataBuffer) + Send + Sync>>>>,
+    announce_handlers: Arc<Mutex<Vec<Arc<dyn AnnounceHandler>>>>,
 }
 
 impl TransportConfig {
@@ -212,10 +317,12 @@ impl Transport {
 
         {
             let handler = handler.clone();
+            let announce_handlers_clone = announce_handlers.clone();
             tokio::spawn(manage_transport(
                 handler,
                 rx_receiver,
                 iface_messages_tx.clone(),
+                announce_handlers_clone,
             ))
         };
 
@@ -232,10 +339,27 @@ impl Transport {
         }
     }
 
-    /// Register a handler for announce events. The handler will be called with the destination and app_data.
-    pub async fn register_announce_handler<F>(&self, handler: F)
+    /// Register a handler for announce events.
+    /// 
+    /// Accepts both closures and types implementing the `AnnounceHandler` trait.
+    /// 
+    /// # Example with closure
+    /// 
+    /// ```ignore
+    /// transport.register_announce_handler(|destination, app_data| {
+    ///     // Handle announce
+    /// }).await;
+    /// ```
+    /// 
+    /// # Example with trait implementation
+    /// 
+    /// ```ignore
+    /// let handler = MyCustomHandler::new();
+    /// transport.register_announce_handler(handler).await;
+    /// ```
+    pub async fn register_announce_handler<H>(&self, handler: H)
     where
-        F: Fn(Arc<Mutex<SingleOutputDestination>>, PacketDataBuffer) + Send + Sync + 'static,
+        H: AnnounceHandler + 'static,
     {
         let mut handlers = self.announce_handlers.lock().await;
         handlers.push(Arc::new(handler));
@@ -1332,6 +1456,7 @@ async fn manage_transport(
     handler: Arc<Mutex<TransportHandler>>,
     rx_receiver: Arc<Mutex<InterfaceRxReceiver>>,
     iface_messages_tx: broadcast::Sender<RxMessage>,
+    announce_handlers: Arc<Mutex<Vec<Arc<dyn AnnounceHandler>>>>,
 ) {
     let cancel = handler.lock().await.cancel.clone();
     let retransmit = handler.lock().await.config.retransmit;
@@ -1404,6 +1529,41 @@ async fn manage_transport(
             }
         })
     };
+
+    // Spawn task to handle announce events and call registered handlers
+    {
+        let handler = handler.clone();
+        let cancel = cancel.clone();
+        let announce_handlers = announce_handlers.clone();
+
+        tokio::spawn(async move {
+            let mut announce_rx = handler.lock().await.announce_tx.subscribe();
+
+            loop {
+                if cancel.is_cancelled() {
+                    break;
+                }
+
+                tokio::select! {
+                    _ = cancel.cancelled() => {
+                        break;
+                    },
+                    Ok(announce_event) = announce_rx.recv() => {
+                        let dest_hash = announce_event.destination.lock().await.desc.address_hash;
+                        let handlers = announce_handlers.lock().await;
+                        for handler in handlers.iter() {
+                            if handler.should_handle(&dest_hash) {
+                                handler.handle_announce(
+                                    announce_event.destination.clone(),
+                                    announce_event.app_data.clone()
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    }
 
     {
         let handler = handler.clone();
