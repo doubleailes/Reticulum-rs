@@ -102,7 +102,6 @@ pub struct TransportConfig {
 pub struct AnnounceEvent {
     pub destination: Arc<Mutex<SingleOutputDestination>>,
     pub app_data: PacketDataBuffer,
-    pub full_name: String,
     pub is_path_response: bool,
 }
 
@@ -114,9 +113,12 @@ pub struct AnnounceEvent {
 /// # Filtering
 ///
 /// Handlers can filter announces by:
-/// - **Aspect**: Only receive announces matching a specific aspect (e.g., "lxmf.delivery")
-/// - **Path responses**: Choose whether to receive path response announces
-/// - **Custom logic**: Use `should_handle()` for additional filtering
+/// - **Path responses**: Choose whether to receive path response announces via `receive_path_responses()`
+/// - **Custom logic**: Use `should_handle()` for filtering based on destination hash or other criteria
+///
+/// Note: `aspect_filter()` is provided for informational/introspection purposes but is not
+/// automatically enforced by the transport. Handlers should implement filtering logic in
+/// `should_handle()` if needed.
 ///
 /// # Example
 ///
@@ -127,7 +129,12 @@ pub struct AnnounceEvent {
 ///
 /// impl AnnounceHandler for LXMFDeliveryHandler {
 ///     fn aspect_filter(&self) -> Option<&str> {
-///         Some("lxmf.delivery")
+///         Some("delivery")  // For documentation/introspection
+///     }
+///     
+///     fn should_handle(&self, destination_hash: &AddressHash) -> bool {
+///         // Implement custom filtering logic here
+///         true
 ///     }
 ///     
 ///     fn handle_announce(&self, destination: Arc<Mutex<SingleOutputDestination>>, app_data: PacketDataBuffer) {
@@ -148,21 +155,30 @@ pub trait AnnounceHandler: Send + Sync {
         app_data: PacketDataBuffer,
     );
 
-    /// Optional aspect filter to only receive announces from destinations with a specific aspect.
+    /// Optional aspect filter for handler self-filtering.
     ///
-    /// When set, only announces from destinations whose aspect matches this filter will be processed.
-    /// The aspect is the second part of the destination name (e.g., "delivery" in "lxmf.delivery").
+    /// **Note**: This filter is NOT automatically enforced by the transport layer.
+    /// Handlers that need aspect-based filtering should implement custom logic in
+    /// `should_handle()` to filter announces based on their own criteria.
+    ///
+    /// This method is provided for informational purposes and backward compatibility.
+    /// Handlers know their own aspect filter and can use it as needed.
     ///
     /// # Returns
     ///
-    /// * `Some(aspect)` - Only process announces matching this aspect
-    /// * `None` - Process announces from all aspects (default)
+    /// * `Some(aspect)` - The aspect this handler is interested in (for documentation/introspection)
+    /// * `None` - No specific aspect (default)
     ///
     /// # Example
     ///
     /// ```ignore
     /// fn aspect_filter(&self) -> Option<&str> {
-    ///     Some("lxmf.delivery")
+    ///     Some("delivery")  // This handler is interested in "delivery" aspect
+    /// }
+    /// 
+    /// fn should_handle(&self, destination_hash: &AddressHash) -> bool {
+    ///     // Implement custom filtering logic here if needed
+    ///     true
     /// }
     /// ```
     fn aspect_filter(&self) -> Option<&str> {
@@ -184,8 +200,11 @@ pub trait AnnounceHandler: Send + Sync {
 
     /// Optional filter to decide whether to process an announce based on custom logic.
     ///
-    /// This is called after aspect and path response filtering.
+    /// This is called after path response filtering.
     /// Return `false` to skip processing this announce.
+    ///
+    /// Handlers that need aspect-based filtering or other custom logic should
+    /// implement it here.
     ///
     /// Default implementation accepts all announces.
     ///
@@ -1356,25 +1375,16 @@ async fn handle_announce<'a>(
             }
         }
 
-        // Get the full name - use existing destination's name if available, otherwise use the validated one
-        let full_name = if let Some(existing) = existing_destination.as_ref() {
-            existing.lock().await.desc.name.full_name()
-        } else {
-            destination.lock().await.desc.name.full_name()
-        };
-        
         log::debug!(
-            "tp({}): sending announce event for {} is_path_response={} full_name={}",
+            "tp({}): sending announce event for {} is_path_response={}",
             handler.config.name,
             dest_hash,
             packet.context == PacketContext::PathResponse,
-            full_name
         );
         
         let send_result = handler.announce_tx.send(AnnounceEvent {
             destination,
             app_data: PacketDataBuffer::new_from_slice(app_data),
-            full_name,
             // Path responses are announces with PathResponse context
             is_path_response: packet.context == PacketContext::PathResponse,
         });
@@ -1699,10 +1709,9 @@ async fn manage_transport(
                         let handlers = announce_handlers.lock().await;
                         
                         log::debug!(
-                            "Announce event: dest={} is_path_response={} full_name={}",
+                            "Announce event: dest={} is_path_response={}",
                             dest_hash,
                             announce_event.is_path_response,
-                            announce_event.full_name
                         );
                         
                         for handler in handlers.iter() {
@@ -1710,11 +1719,8 @@ async fn manage_transport(
                                  continue;
                          }
 
-                            if let Some(aspect) = handler.aspect_filter() {
-                            if announce_event.full_name.split_once('.').map_or(true, |(_, a)| a != aspect) {
-                                     continue;
-                                 }
-                             }
+                            // Note: aspect_filter is deprecated and no longer enforced at transport level.
+                            // Handlers should implement their own filtering logic in should_handle() if needed.
 
                             // Custom filter
                             if handler.should_handle(&dest_hash) {
