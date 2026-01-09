@@ -227,6 +227,9 @@ struct TransportHandler {
     out_links: HashMap<AddressHash, Arc<Mutex<Link>>>,
     in_links: HashMap<AddressHash, Arc<Mutex<Link>>>,
 
+    // Cache mapping destination hash to full name (app.aspect) for received announces
+    destination_names: HashMap<AddressHash, String>,
+
     packet_cache: Mutex<PacketCache>,
     receipts: HashMap<Hash, PacketReceipt>,
     receipt_order: VecDeque<Hash>,
@@ -307,6 +310,7 @@ impl Transport {
             announce_limits: AnnounceLimits::new(),
             out_links: HashMap::new(),
             in_links: HashMap::new(),
+            destination_names: HashMap::new(),
             packet_cache: Mutex::new(PacketCache::new()),
             receipts: HashMap::new(),
             receipt_order: VecDeque::new(),
@@ -610,18 +614,21 @@ impl Transport {
         identity: PrivateIdentity,
         name: DestinationName,
     ) -> Arc<Mutex<SingleInputDestination>> {
-        let destination = SingleInputDestination::new(identity, name);
+        let destination = SingleInputDestination::new(identity, name.clone());
         let address_hash = destination.desc.address_hash;
+        let full_name = name.full_name();
 
         log::debug!("tp({}): add destination {}", self.name, address_hash);
 
         let destination = Arc::new(Mutex::new(destination));
 
-        self.handler
-            .lock()
-            .await
-            .single_in_destinations
-            .insert(address_hash, destination.clone());
+        let mut handler = self.handler.lock().await;
+        handler.single_in_destinations.insert(address_hash, destination.clone());
+        // Store full name for this destination
+        if !full_name.is_empty() {
+            handler.destination_names.insert(address_hash, full_name);
+        }
+        drop(handler);
 
         destination
     }
@@ -1130,9 +1137,18 @@ async fn handle_path_request<'a>(
 
         // Send an announce with PathResponse context
         let mut destination = destination.lock().await;
-        if let Ok(mut announce_packet) = destination.announce(OsRng, None) {
+        let full_name = destination.desc.name.full_name();
+        
+        // Include full name in app_data for path responses so receivers can filter by aspect
+        let path_response_app_data = if !full_name.is_empty() {
+            Some(full_name.as_bytes())
+        } else {
+            None
+        };
+        
+        if let Ok(mut announce_packet) = destination.announce(OsRng, path_response_app_data) {
             // Set the context to PathResponse
-            // NOTE: Do NOT modify context_flag - it indicates ratchet presence, not path response
+            // NOTE: DO NOT modify context_flag - it indicates ratchet presence, not path response
             announce_packet.context = PacketContext::PathResponse;
             
             drop(destination); // Release the lock before returning
@@ -1356,11 +1372,31 @@ async fn handle_announce<'a>(
             }
         }
 
-        // Get the full name - use existing destination's name if available, otherwise use the validated one
-        let full_name = if let Some(existing) = existing_destination.as_ref() {
-            existing.lock().await.desc.name.full_name()
+        // Get the full name - try multiple sources in order of preference:
+        // 1. For path responses, try to extract from app_data (if it's a valid UTF-8 string with a dot)
+        // 2. Check destination_names cache (populated from local destinations)
+        // 3. Check if this is a local input destination
+        // 4. Fall back to empty string
+        let full_name = if packet.context == PacketContext::PathResponse && !app_data.is_empty() {
+            // Path responses include full name in app_data
+            if let Ok(name) = std::str::from_utf8(app_data) {
+                // Validate it looks like a destination name (contains at least one dot)
+                if name.contains('.') {
+                    // Cache it for future use
+                    handler.destination_names.insert(dest_hash, name.to_string());
+                    name.to_string()
+                } else {
+                    String::new()
+                }
+            } else {
+                String::new()
+            }
+        } else if let Some(cached_name) = handler.destination_names.get(&dest_hash) {
+            cached_name.clone()
+        } else if let Some(local_dest) = handler.single_in_destinations.get(&dest_hash) {
+            local_dest.lock().await.desc.name.full_name()
         } else {
-            destination.lock().await.desc.name.full_name()
+            String::new()
         };
         
         log::debug!(
