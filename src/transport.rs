@@ -2021,4 +2021,85 @@ mod tests {
                 .await
         );
     }
+
+    #[tokio::test]
+    async fn link_request_not_filtered_as_duplicate() {
+        let transport = Transport::new(TransportConfig::default());
+        let handler = transport.get_handler();
+
+        let destination = AddressHash::new_from_rand(OsRng);
+
+        // Create a LinkRequest packet
+        let mut link_request: Packet = Default::default();
+        link_request.header.packet_type = PacketType::LinkRequest;
+        link_request.destination = destination;
+        link_request.data = PacketDataBuffer::new_from_slice(b"link_request_data");
+
+        // First LinkRequest should be allowed through
+        assert!(
+            handler
+                .lock()
+                .await
+                .filter_duplicate_packets(&link_request)
+                .await,
+            "First LinkRequest should be allowed"
+        );
+
+        // Duplicate LinkRequest should ALSO be allowed through
+        // This is the key behavior we're testing
+        let duplicate_link_request = link_request.clone();
+        assert!(
+            handler
+                .lock()
+                .await
+                .filter_duplicate_packets(&duplicate_link_request)
+                .await,
+            "Duplicate LinkRequest should be allowed (not filtered)"
+        );
+
+        // A third identical LinkRequest should still be allowed
+        assert!(
+            handler
+                .lock()
+                .await
+                .filter_duplicate_packets(&link_request)
+                .await,
+            "Third LinkRequest should still be allowed"
+        );
+    }
+
+    #[tokio::test]
+    async fn announce_not_filtered_as_duplicate() {
+        let transport = Transport::new(TransportConfig::default());
+        let handler = transport.get_handler();
+
+        let destination = AddressHash::new_from_rand(OsRng);
+
+        // Create an Announce packet
+        let mut announce: Packet = Default::default();
+        announce.header.packet_type = PacketType::Announce;
+        announce.destination = destination;
+        announce.data = PacketDataBuffer::new_from_slice(b"announce_data");
+
+        // First announce should be allowed through
+        assert!(
+            handler
+                .lock()
+                .await
+                .filter_duplicate_packets(&announce)
+                .await,
+            "First announce should be allowed"
+        );
+
+        // Duplicate announce should ALSO be allowed through
+        let duplicate_announce = announce.clone();
+        assert!(
+            handler
+                .lock()
+                .await
+                .filter_duplicate_packets(&duplicate_announce)
+                .await,
+            "Duplicate announce should be allowed (not filtered)"
+        );
+    }
 }
