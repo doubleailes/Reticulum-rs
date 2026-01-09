@@ -614,9 +614,9 @@ impl Transport {
         identity: PrivateIdentity,
         name: DestinationName,
     ) -> Arc<Mutex<SingleInputDestination>> {
-        let destination = SingleInputDestination::new(identity, name.clone());
-        let address_hash = destination.desc.address_hash;
         let full_name = name.full_name();
+        let destination = SingleInputDestination::new(identity, name);
+        let address_hash = destination.desc.address_hash;
 
         log::debug!("tp({}): add destination {}", self.name, address_hash);
 
@@ -1373,23 +1373,20 @@ async fn handle_announce<'a>(
         }
 
         // Get the full name - try multiple sources in order of preference:
-        // 1. For path responses, try to extract from app_data (if it's a valid UTF-8 string with a dot)
+        // 1. For path responses, try to extract from app_data (if it's a valid UTF-8 destination name)
         // 2. Check destination_names cache (populated from local destinations)
         // 3. Check if this is a local input destination
         // 4. Fall back to empty string
         let full_name = if packet.context == PacketContext::PathResponse && !app_data.is_empty() {
             // Path responses include full name in app_data
-            if let Ok(name) = std::str::from_utf8(app_data) {
-                // Validate it looks like a destination name (contains at least one dot)
-                if name.contains('.') {
+            match std::str::from_utf8(app_data) {
+                Ok(name) if name.contains('.') => {
                     // Cache it for future use
-                    handler.destination_names.insert(dest_hash, name.to_string());
-                    name.to_string()
-                } else {
-                    String::new()
+                    let name_string = name.to_string();
+                    handler.destination_names.insert(dest_hash, name_string.clone());
+                    name_string
                 }
-            } else {
-                String::new()
+                _ => String::new(),
             }
         } else if let Some(cached_name) = handler.destination_names.get(&dest_hash) {
             cached_name.clone()
