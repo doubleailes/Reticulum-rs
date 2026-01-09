@@ -950,6 +950,12 @@ impl TransportHandler {
             PacketType::Announce => {
                 return true;
             }
+            PacketType::LinkRequest => {
+                // Allow LinkRequest packets through even if duplicate
+                // Link establishment is critical and the link handling code
+                // will decide whether to process duplicate requests
+                return true;
+            }
             PacketType::Proof => {
                 if packet.context == PacketContext::LinkRequestProof {
                     if let Some(link) = self.in_links.get(&packet.destination) {
