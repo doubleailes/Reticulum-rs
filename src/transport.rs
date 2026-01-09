@@ -161,8 +161,8 @@ pub trait AnnounceHandler: Send + Sync {
     /// Handlers that need aspect-based filtering should implement custom logic in
     /// `should_handle()` to filter announces based on their own criteria.
     ///
-    /// This method is provided for informational purposes and backward compatibility.
-    /// Handlers know their own aspect filter and can use it as needed.
+    /// This method is provided for informational purposes and for handlers to define
+    /// their intended filtering scope.
     ///
     /// # Returns
     ///
