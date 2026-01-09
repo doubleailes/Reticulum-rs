@@ -62,16 +62,21 @@ impl AnnounceHandler for TestAnnounceHandler {
         tokio::spawn(async move {
             let dest = destination.lock().await;
             let dest_hash = dest.desc.address_hash;
+            // Note: full_name() returns empty string for remote announces (created from hash)
             let full_name = dest.desc.name.full_name();
             
             let mut count = received_count.lock().await;
             *count += 1;
             
             log::info!(
-                "TestHandler: Received announce #{} from {} ({})",
+                "TestHandler: Received announce #{} from {}{}",
                 *count,
                 dest_hash,
-                full_name
+                if !full_name.is_empty() {
+                    format!(" ({})", full_name)
+                } else {
+                    String::new()
+                }
             );
             log::info!(
                 "  App data: {}",
