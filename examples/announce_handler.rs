@@ -36,13 +36,18 @@ impl AnnounceHandler for LXMFDeliveryHandler {
         tokio::spawn(async move {
             let dest = destination.lock().await;
             let dest_hash = dest.desc.address_hash;
+            // Note: full_name() returns empty string for remote announces (created from hash)
             let full_name = dest.desc.name.full_name();
 
             log::info!(
-                "[{}] 📬 Delivery announce from: {} ({})",
+                "[{}] 📬 Delivery announce from: {}{}",
                 name,
                 dest_hash,
-                full_name
+                if !full_name.is_empty() {
+                    format!(" ({})", full_name)
+                } else {
+                    String::new()
+                }
             );
             log::info!(
                 "   App data: {}",
@@ -82,13 +87,18 @@ impl AnnounceHandler for LXMFPropagationHandler {
         tokio::spawn(async move {
             let dest = destination.lock().await;
             let dest_hash = dest.desc.address_hash;
+            // Note: full_name() returns empty string for remote announces (created from hash)
             let full_name = dest.desc.name.full_name();
 
             log::info!(
-                "[{}] 🌐 Propagation announce from: {} ({})",
+                "[{}] 🌐 Propagation announce from: {}{}",
                 name,
                 dest_hash,
-                full_name
+                if !full_name.is_empty() {
+                    format!(" ({})", full_name)
+                } else {
+                    String::new()
+                }
             );
             log::info!(
                 "   App data: {}",
@@ -128,14 +138,19 @@ impl AnnounceHandler for StatsAnnounceHandler {
 
             let dest = destination.lock().await;
             let dest_hash = dest.desc.address_hash;
+            // Note: full_name() returns empty string for remote announces (created from hash)
             let full_name = dest.desc.name.full_name();
 
             log::info!(
-                "[{}] 📊 Announce #{} from: {} ({})",
+                "[{}] 📊 Announce #{} from: {}{}",
                 name,
                 counter,
                 dest_hash,
-                full_name
+                if !full_name.is_empty() {
+                    format!(" ({})", full_name)
+                } else {
+                    String::new()
+                }
             );
             log::info!(
                 "   App data: {}",
@@ -184,11 +199,16 @@ async fn main() {
                 tokio::spawn(async move {
                     let dest = destination.lock().await;
                     let dest_hash = dest.desc.address_hash;
+                    // Note: full_name() returns empty string for remote announces (created from hash)
                     let full_name = dest.desc.name.full_name();
                     log::info!(
-                        "📢 [ClosureHandler] Received announce from: {} ({})",
+                        "📢 [ClosureHandler] Received announce from: {}{}",
                         dest_hash,
-                        full_name
+                        if !full_name.is_empty() {
+                            format!(" ({})", full_name)
+                        } else {
+                            String::new()
+                        }
                     );
                     log::info!(
                         "   App data: {}",
