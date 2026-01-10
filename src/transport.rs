@@ -768,6 +768,53 @@ impl Drop for Transport {
 
 impl TransportHandler {
     async fn send_packet(&mut self, original_packet: Packet) -> Option<PacketReceipt> {
+        // Handle link-destined packets specially
+        if original_packet.header.destination_type == DestinationType::Link {
+            // Try incoming links first (we are the link receiver)
+            if let Some(link) = self.in_links.get(&original_packet.destination) {
+                let link = link.lock().await;
+                if let Some(iface) = link.origin_interface() {
+                    log::trace!(
+                        "send_packet: routing link packet to {} via stored interface",
+                        original_packet.destination
+                    );
+                    self.send(TxMessage {
+                        tx_type: TxMessageType::Direct(iface),
+                        packet: original_packet,
+                    })
+                    .await;
+                    return None; // No receipt for link packets
+                }
+            }
+
+            // Try outgoing links (we are the link initiator)
+            // For outgoing links, use path_table to route to the original destination
+            if self.out_links.contains_key(&original_packet.destination) {
+                // Fall through to normal path_table routing
+                // This should work because we have a path to the destination we linked to
+            } else {
+                // Try link_table for remote/routed links
+                if let Some(original_dest) = self.link_table.original_destination(&original_packet.destination) {
+                    let (packet, maybe_iface) = self.path_table.handle_inbound_packet(&original_packet, Some(original_dest));
+                    if let Some(iface) = maybe_iface {
+                        self.send(TxMessage {
+                            tx_type: TxMessageType::Direct(iface),
+                            packet,
+                        })
+                        .await;
+                        return None;
+                    }
+                }
+
+                // Link packet with no route - this is the bug we're fixing
+                log::warn!(
+                    "send_packet: no route for link packet to {}, falling back to broadcast",
+                    original_packet.destination
+                );
+            }
+        }
+
+        // Original logic for non-link packets and fallback
         let (packet, maybe_iface) = self.path_table.handle_packet(&original_packet);
         let receipt = self.maybe_create_receipt(&packet).await;
         let tx_type = maybe_iface
@@ -1409,6 +1456,7 @@ async fn handle_announce<'a>(
 async fn handle_link_request_as_destination<'a>(
     destination: Arc<Mutex<SingleInputDestination>>,
     packet: &Packet,
+    iface: AddressHash,
     mut handler: MutexGuard<'a, TransportHandler>,
 ) {
     let mut destination = destination.lock().await;
@@ -1438,6 +1486,9 @@ async fn handle_link_request_as_destination<'a>(
                         link.id(),
                         link.destination().address_hash
                     );
+
+                    // Store the interface this link came from for routing responses
+                    link.set_origin_interface(iface);
 
                     handler
                         .in_links
@@ -1483,7 +1534,7 @@ async fn handle_link_request<'a>(
             packet.destination
         );
 
-        handle_link_request_as_destination(destination, packet, handler).await;
+        handle_link_request_as_destination(destination, packet, iface, handler).await;
     } else if let Some(entry) = handler.path_table.next_hop_full(&packet.destination) {
         log::trace!(
             "tp({}): handle link request for remote destination {}",
