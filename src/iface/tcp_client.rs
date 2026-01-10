@@ -157,6 +157,7 @@ impl TcpClient {
             // Start transmit task
             let tx_task = {
                 let cancel = cancel.clone();
+                let stop = stop.clone();  // Clone stop for TX task
                 let tx_channel = tx_channel.clone();
                 let mut stream = write_stream;
 
