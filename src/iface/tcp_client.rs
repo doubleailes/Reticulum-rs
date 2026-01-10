@@ -93,6 +93,7 @@ impl TcpClient {
                 tokio::spawn(async move {
                     let mut hdlc_rx_buffer = [0u8; BUFFER_SIZE];
                     let mut rx_buffer = [0u8; BUFFER_SIZE + (BUFFER_SIZE / 2)];
+                    let mut rx_write_pos = 0usize;  // Track write position in rx_buffer
                     let mut tcp_buffer = [0u8; (BUFFER_SIZE * 16)];
 
                     loop {
@@ -112,16 +113,29 @@ impl TcpClient {
                                         }
                                         Ok(n) => {
                                             log::trace!("tcp_client: read {} bytes from TCP stream", n);
-                                            // TCP stream may contain several or partial HDLC frames
+                                            
+                                            // Append incoming data to rx_buffer
                                             for i in 0..n {
-                                                // Push new byte from the end of buffer
-                                                rx_buffer[rx_buffer.len()-1] = tcp_buffer[i];
+                                                if rx_write_pos >= rx_buffer.len() {
+                                                    // Buffer full, shift data and make room
+                                                    log::warn!("tcp_client: rx_buffer full, shifting data");
+                                                    let half_len = rx_buffer.len() / 2;
+                                                    rx_buffer.copy_within(half_len.., 0);
+                                                    rx_write_pos = half_len;
+                                                }
+                                                rx_buffer[rx_write_pos] = tcp_buffer[i];
+                                                rx_write_pos += 1;
+                                            }
 
-                                                // Check if it is contains a HDLC frame
-                                                let frame = Hdlc::find(&rx_buffer[..]);
+                                            // Process all complete HDLC frames in buffer
+                                            loop {
+                                                let frame = Hdlc::find(&rx_buffer[..rx_write_pos]);
                                                 if let Some(frame) = frame {
+                                                    let frame_start = frame.0;
+                                                    let frame_end = frame.1;
+                                                    
                                                     // Decode HDLC frame and deserialize packet
-                                                    let frame_buffer = &mut rx_buffer[frame.0..frame.1+1];
+                                                    let frame_buffer = &mut rx_buffer[frame_start..frame_end+1];
                                                     let mut output = OutputBuffer::new(&mut hdlc_rx_buffer[..]);
                                                     if let Ok(_) = Hdlc::decode(frame_buffer, &mut output) {
                                                         if let Ok(packet) = Packet::deserialize(&mut InputBuffer::new(output.as_slice())) {
@@ -143,11 +157,15 @@ impl TcpClient {
                                                         log::warn!("tcp_client: couldn't decode hdlc frame");
                                                     }
 
-                                                    // Remove current HDLC frame data
-                                                    frame_buffer.fill(0);
+                                                    // Remove processed frame from buffer by shifting remaining data
+                                                    let remaining = rx_write_pos - (frame_end + 1);
+                                                    if remaining > 0 {
+                                                        rx_buffer.copy_within(frame_end+1..rx_write_pos, 0);
+                                                    }
+                                                    rx_write_pos = remaining;
                                                 } else {
-                                                    // Move data left
-                                                    rx_buffer.copy_within(1.., 0);
+                                                    // No complete frame found, wait for more data
+                                                    break;
                                                 }
                                             }
                                         }
