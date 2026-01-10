@@ -1003,6 +1003,13 @@ impl TransportHandler {
     }
 
     async fn filter_duplicate_packets(&self, packet: &Packet) -> bool {
+        // Link-destined packets should bypass duplicate filtering
+        // They have their own session management via the Link ID and
+        // the Link layer handles state management internally
+        if packet.header.destination_type == DestinationType::Link {
+            return true;
+        }
+
         let mut allow_duplicate = false;
 
         match packet.header.packet_type {
@@ -2163,6 +2170,96 @@ mod tests {
                 .filter_duplicate_packets(&duplicate_announce)
                 .await,
             "Duplicate announce should be allowed (not filtered)"
+        );
+    }
+
+    #[tokio::test]
+    async fn link_data_packets_not_filtered_as_duplicate() {
+        let transport = Transport::new(TransportConfig::default());
+        let handler = transport.get_handler();
+
+        let link_id = AddressHash::new_from_rand(OsRng);
+
+        // Create a Link Data packet with Resource context
+        let mut resource_packet: Packet = Default::default();
+        resource_packet.header.packet_type = PacketType::Data;
+        resource_packet.header.destination_type = DestinationType::Link;
+        resource_packet.destination = link_id;
+        resource_packet.context = PacketContext::Resource;
+        resource_packet.data = PacketDataBuffer::new_from_slice(b"resource_data_part");
+
+        // First packet should be allowed
+        assert!(
+            handler
+                .lock()
+                .await
+                .filter_duplicate_packets(&resource_packet)
+                .await,
+            "First Resource packet should be allowed"
+        );
+
+        // Second identical packet should ALSO be allowed (Link packets bypass filter)
+        assert!(
+            handler
+                .lock()
+                .await
+                .filter_duplicate_packets(&resource_packet)
+                .await,
+            "Duplicate Link packets should be allowed"
+        );
+
+        // Test with ResourceAdvrtisement context as well
+        let mut adv_packet: Packet = Default::default();
+        adv_packet.header.packet_type = PacketType::Data;
+        adv_packet.header.destination_type = DestinationType::Link;
+        adv_packet.destination = link_id;
+        adv_packet.context = PacketContext::ResourceAdvrtisement;
+        adv_packet.data = PacketDataBuffer::new_from_slice(b"resource_advertisement");
+
+        // Both advertisements should be allowed
+        assert!(
+            handler
+                .lock()
+                .await
+                .filter_duplicate_packets(&adv_packet)
+                .await,
+            "First ResourceAdvrtisement should be allowed"
+        );
+
+        assert!(
+            handler
+                .lock()
+                .await
+                .filter_duplicate_packets(&adv_packet)
+                .await,
+            "Duplicate ResourceAdvrtisement should be allowed for Link packets"
+        );
+
+        // Test with KeepAlive context
+        let mut keepalive_packet: Packet = Default::default();
+        keepalive_packet.header.packet_type = PacketType::Data;
+        keepalive_packet.header.destination_type = DestinationType::Link;
+        keepalive_packet.destination = link_id;
+        keepalive_packet.context = PacketContext::KeepAlive;
+        keepalive_packet.data = PacketDataBuffer::new_from_slice(b"keepalive");
+
+        // KeepAlive packets should also bypass (they're Link-destined)
+        assert!(
+            handler
+                .lock()
+                .await
+                .filter_duplicate_packets(&keepalive_packet)
+                .await,
+            "First KeepAlive should be allowed"
+        );
+
+        assert!(
+            handler
+                .lock()
+                .await
+                .filter_duplicate_packets(&keepalive_packet)
+                .await,
+            "Duplicate KeepAlive should be allowed for Link packets"
         );
     }
 }
