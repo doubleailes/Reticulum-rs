@@ -39,7 +39,7 @@ impl LinkStatus {
 
 pub type LinkId = AddressHash;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct LinkPayload {
     buffer: [u8; PACKET_MDU],
     len: usize,
@@ -108,13 +108,14 @@ impl From<&Packet> for LinkId {
     }
 }
 
+#[derive(Debug, PartialEq)]
 pub enum LinkHandleResult {
     None,
     Activated,
     KeepAlive,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum LinkEvent {
     Activated,
     Data(LinkPayload),
@@ -122,7 +123,7 @@ pub enum LinkEvent {
     Closed,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct LinkResourcePacket {
     pub packet_type: PacketType,
     pub context: PacketContext,
@@ -614,4 +615,335 @@ fn validate_proof_packet(
         .map_err(|_| RnsError::IncorrectSignature)?;
 
     Ok(identity)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::destination::DestinationName;
+    use tokio::sync::broadcast;
+
+    #[test]
+    fn test_resource_advertisement_emits_event() {
+        let (event_tx, mut event_rx) = broadcast::channel(16);
+        let priv_id = PrivateIdentity::new_from_rand(OsRng);
+        let dest_name = DestinationName::new("test", "resource");
+
+        let mut link = Link::new(
+            DestinationDesc {
+                identity: priv_id.as_identity().clone(),
+                address_hash: AddressHash::new_from_hash(&Hash::new([99u8; 32])),
+                name: dest_name,
+            },
+            event_tx,
+        );
+
+        // Set up the link as active with a proper handshake
+        link.handshake(priv_id.as_identity().clone());
+        link.status = LinkStatus::Active;
+        let link_id = AddressHash::new_from_hash(&Hash::new([1u8; 32]));
+        link.id = link_id;
+
+        // Create a resource advertisement packet with encrypted data
+        let test_payload = b"resource_advertisement_data";
+        let mut encrypted_buf = vec![0u8; PACKET_MDU];
+        let encrypted_data = link
+            .encrypt(test_payload, &mut encrypted_buf)
+            .expect("encryption should work");
+
+        let mut packet_data = PacketDataBuffer::new();
+        packet_data.safe_write(encrypted_data);
+
+        let packet = Packet {
+            header: Header {
+                packet_type: PacketType::Data,
+                destination_type: DestinationType::Link,
+                ..Default::default()
+            },
+            ifac: None,
+            destination: link_id,
+            transport: None,
+            context: PacketContext::ResourceAdvrtisement,
+            data: packet_data,
+        };
+
+        // Handle the packet
+        let result = link.handle_packet(&packet);
+
+        // Verify the result
+        assert_eq!(result, LinkHandleResult::None);
+
+        // Check that a Resource event was emitted
+        let event_data = event_rx.try_recv().expect("should receive event");
+        assert_eq!(event_data.id, link_id);
+
+        match event_data.event {
+            LinkEvent::Resource(resource_packet) => {
+                assert_eq!(resource_packet.context, PacketContext::ResourceAdvrtisement);
+                assert_eq!(resource_packet.packet_type, PacketType::Data);
+                // Verify the payload was decrypted correctly
+                assert_eq!(resource_packet.payload.as_slice(), test_payload);
+            }
+            _ => panic!("Expected Resource event, got {:?}", event_data.event),
+        }
+    }
+
+    #[test]
+    fn test_resource_data_emits_event() {
+        let (event_tx, mut event_rx) = broadcast::channel(16);
+        let priv_id = PrivateIdentity::new_from_rand(OsRng);
+        let dest_name = DestinationName::new("test", "resource");
+
+        let mut link = Link::new(
+            DestinationDesc {
+                identity: priv_id.as_identity().clone(),
+                address_hash: AddressHash::new_from_hash(&Hash::new([98u8; 32])),
+                name: dest_name,
+            },
+            event_tx,
+        );
+
+        link.handshake(priv_id.as_identity().clone());
+        link.status = LinkStatus::Active;
+        let link_id = AddressHash::new_from_hash(&Hash::new([2u8; 32]));
+        link.id = link_id;
+
+        // Resource context packets are NOT encrypted (they contain already-encrypted chunks)
+        let test_payload = b"resource_chunk_data";
+        let mut packet_data = PacketDataBuffer::new();
+        packet_data.safe_write(test_payload);
+
+        let packet = Packet {
+            header: Header {
+                packet_type: PacketType::Data,
+                destination_type: DestinationType::Link,
+                ..Default::default()
+            },
+            ifac: None,
+            destination: link_id,
+            transport: None,
+            context: PacketContext::Resource,
+            data: packet_data,
+        };
+
+        let result = link.handle_packet(&packet);
+        assert_eq!(result, LinkHandleResult::None);
+
+        let event_data = event_rx.try_recv().expect("should receive event");
+        assert_eq!(event_data.id, link_id);
+
+        match event_data.event {
+            LinkEvent::Resource(resource_packet) => {
+                assert_eq!(resource_packet.context, PacketContext::Resource);
+                assert_eq!(resource_packet.packet_type, PacketType::Data);
+                assert_eq!(resource_packet.payload.as_slice(), test_payload);
+            }
+            _ => panic!("Expected Resource event"),
+        }
+    }
+
+    #[test]
+    fn test_resource_proof_emits_event() {
+        let (event_tx, mut event_rx) = broadcast::channel(16);
+        let priv_id = PrivateIdentity::new_from_rand(OsRng);
+        let dest_name = DestinationName::new("test", "resource");
+
+        let mut link = Link::new(
+            DestinationDesc {
+                identity: priv_id.as_identity().clone(),
+                address_hash: AddressHash::new_from_hash(&Hash::new([97u8; 32])),
+                name: dest_name,
+            },
+            event_tx,
+        );
+
+        link.handshake(priv_id.as_identity().clone());
+        link.status = LinkStatus::Active;
+        let link_id = AddressHash::new_from_hash(&Hash::new([3u8; 32]));
+        link.id = link_id;
+
+        // Resource proof packets use Proof packet type
+        let test_payload = b"resource_proof_data";
+        let mut packet_data = PacketDataBuffer::new();
+        packet_data.safe_write(test_payload);
+
+        let packet = Packet {
+            header: Header {
+                packet_type: PacketType::Proof,
+                destination_type: DestinationType::Link,
+                ..Default::default()
+            },
+            ifac: None,
+            destination: link_id,
+            transport: None,
+            context: PacketContext::ResourceProof,
+            data: packet_data,
+        };
+
+        let result = link.handle_packet(&packet);
+        assert_eq!(result, LinkHandleResult::None);
+
+        let event_data = event_rx.try_recv().expect("should receive event");
+        assert_eq!(event_data.id, link_id);
+
+        match event_data.event {
+            LinkEvent::Resource(resource_packet) => {
+                assert_eq!(resource_packet.context, PacketContext::ResourceProof);
+                assert_eq!(resource_packet.packet_type, PacketType::Proof);
+                assert_eq!(resource_packet.payload.as_slice(), test_payload);
+            }
+            _ => panic!("Expected Resource event"),
+        }
+    }
+
+    #[test]
+    fn test_all_resource_contexts_handled() {
+        // Test that all resource-related contexts are properly handled
+        let resource_contexts = vec![
+            (PacketContext::Resource, PacketType::Data, false), // Not encrypted
+            (
+                PacketContext::ResourceAdvrtisement,
+                PacketType::Data,
+                true,
+            ), // Encrypted
+            (PacketContext::ResourceRequest, PacketType::Data, true), // Encrypted
+            (
+                PacketContext::ResourceHashUpdate,
+                PacketType::Data,
+                true,
+            ), // Encrypted
+            (PacketContext::ResourceProof, PacketType::Proof, false), // Not encrypted
+            (
+                PacketContext::ResourceInitiatorCancel,
+                PacketType::Data,
+                true,
+            ), // Encrypted
+            (
+                PacketContext::ResourceReceiverCancel,
+                PacketType::Data,
+                true,
+            ), // Encrypted
+        ];
+
+        for (idx, (context, packet_type, is_encrypted)) in resource_contexts.iter().enumerate() {
+            let (event_tx, mut event_rx) = broadcast::channel(16);
+            let priv_id = PrivateIdentity::new_from_rand(OsRng);
+            let dest_name = DestinationName::new("test", "resource");
+
+            let mut link = Link::new(
+                DestinationDesc {
+                    identity: priv_id.as_identity().clone(),
+                    address_hash: AddressHash::new_from_hash(&Hash::new([96u8; 32])),
+                    name: dest_name,
+                },
+                event_tx,
+            );
+
+            link.handshake(priv_id.as_identity().clone());
+            link.status = LinkStatus::Active;
+            let link_id = AddressHash::new_from_hash(&Hash::new([(4 + idx) as u8; 32]));
+            link.id = link_id;
+
+            let test_payload = format!("test_{:?}", context);
+            let mut packet_data = PacketDataBuffer::new();
+
+            if *is_encrypted {
+                let mut encrypted_buf = vec![0u8; PACKET_MDU];
+                let encrypted_data = link
+                    .encrypt(test_payload.as_bytes(), &mut encrypted_buf)
+                    .expect("encryption should work");
+                packet_data.safe_write(encrypted_data);
+            } else {
+                packet_data.safe_write(test_payload.as_bytes());
+            }
+
+            let packet = Packet {
+                header: Header {
+                    packet_type: *packet_type,
+                    destination_type: DestinationType::Link,
+                    ..Default::default()
+                },
+                ifac: None,
+                destination: link_id,
+                transport: None,
+                context: *context,
+                data: packet_data,
+            };
+
+            link.handle_packet(&packet);
+
+            let event_data = event_rx
+                .try_recv()
+                .unwrap_or_else(|_| panic!("should receive event for {:?}", context));
+
+            match event_data.event {
+                LinkEvent::Resource(resource_packet) => {
+                    assert_eq!(resource_packet.context, *context);
+                    assert_eq!(resource_packet.packet_type, *packet_type);
+                    if *is_encrypted {
+                        assert_eq!(resource_packet.payload.as_slice(), test_payload.as_bytes());
+                    }
+                }
+                _ => panic!("Expected Resource event for {:?}", context),
+            }
+        }
+    }
+
+    #[test]
+    fn test_non_resource_data_still_works() {
+        // Verify that regular data packets still work correctly
+        let (event_tx, mut event_rx) = broadcast::channel(16);
+        let priv_id = PrivateIdentity::new_from_rand(OsRng);
+        let dest_name = DestinationName::new("test", "data");
+
+        let mut link = Link::new(
+            DestinationDesc {
+                identity: priv_id.as_identity().clone(),
+                address_hash: AddressHash::new_from_hash(&Hash::new([95u8; 32])),
+                name: dest_name,
+            },
+            event_tx,
+        );
+
+        link.handshake(priv_id.as_identity().clone());
+        link.status = LinkStatus::Active;
+        let link_id = AddressHash::new_from_hash(&Hash::new([5u8; 32]));
+        link.id = link_id;
+
+        let test_payload = b"regular_data_packet";
+        let mut encrypted_buf = vec![0u8; PACKET_MDU];
+        let encrypted_data = link
+            .encrypt(test_payload, &mut encrypted_buf)
+            .expect("encryption should work");
+
+        let mut packet_data = PacketDataBuffer::new();
+        packet_data.safe_write(encrypted_data);
+
+        let packet = Packet {
+            header: Header {
+                packet_type: PacketType::Data,
+                destination_type: DestinationType::Link,
+                ..Default::default()
+            },
+            ifac: None,
+            destination: link_id,
+            transport: None,
+            context: PacketContext::None,
+            data: packet_data,
+        };
+
+        let result = link.handle_packet(&packet);
+        assert_eq!(result, LinkHandleResult::None);
+
+        let event_data = event_rx.try_recv().expect("should receive event");
+        assert_eq!(event_data.id, link_id);
+
+        // Regular data should come as Data event, not Resource event
+        match event_data.event {
+            LinkEvent::Data(payload) => {
+                assert_eq!(payload.as_slice(), test_payload);
+            }
+            _ => panic!("Expected Data event, not Resource event"),
+        }
+    }
 }
