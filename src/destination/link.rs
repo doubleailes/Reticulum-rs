@@ -115,14 +115,34 @@ pub enum LinkHandleResult {
     KeepAlive,
 }
 
+/// Events emitted by a Link that can be subscribed to by consumers.
+///
+/// These events represent significant state changes or data arrival on the link.
+/// Consumers can subscribe to these events using the broadcast channel provided
+/// when creating the link through the Transport.
 #[derive(Clone, Debug)]
 pub enum LinkEvent {
+    /// The link has been activated and is ready for data transfer
     Activated,
+    /// Regular data packet received (encrypted at link level)
     Data(LinkPayload),
+    /// Resource-related packet received (for file transfers, large messages)
+    /// Should be processed by ResourceManager
     Resource(LinkResourcePacket),
+    /// The link has been closed
     Closed,
 }
 
+/// Represents a resource-related packet received over a link.
+///
+/// Resources are used for transferring data that doesn't fit in a single packet,
+/// such as files or large LXMF messages. This packet type encapsulates all
+/// resource-related contexts including advertisements, requests, data parts,
+/// and proofs.
+///
+/// The payload may be encrypted or unencrypted depending on the context:
+/// - Encrypted: ResourceAdvrtisement, ResourceRequest, ResourceHashUpdate, etc.
+/// - Unencrypted: Resource (data parts), ResourceProof
 #[derive(Clone, Debug)]
 pub struct LinkResourcePacket {
     pub packet_type: PacketType,
@@ -266,6 +286,18 @@ impl Link {
         packet
     }
 
+    /// Handles incoming data packets on the link.
+    ///
+    /// This method processes different packet contexts:
+    /// - `None`: Regular encrypted data packets (emitted as `LinkEvent::Data`)
+    /// - `KeepAlive`: Keep-alive packets for connection maintenance
+    /// - `Resource`: Unencrypted resource data parts (already encrypted by ResourceManager)
+    /// - Resource management contexts (encrypted): `ResourceAdvrtisement`, `ResourceRequest`,
+    ///   `ResourceHashUpdate`, `ResourceInitiatorCancel`, `ResourceReceiverCancel`
+    ///
+    /// All resource-related packets are emitted as `LinkEvent::Resource` for processing
+    /// by the ResourceManager. This enables file transfers and large message delivery
+    /// over established links, which is essential for LXMF compatibility.
     fn handle_data_packet(&mut self, packet: &Packet) -> LinkHandleResult {
         if self.status != LinkStatus::Active {
             log::warn!("link({}): handling data packet in inactive state", self.id);
@@ -294,6 +326,8 @@ impl Link {
                     return LinkHandleResult::None;
                 }
             }
+            // Resource data parts are NOT encrypted at the link level
+            // (they're already encrypted by the ResourceManager)
             PacketContext::Resource => {
                 self.post_event(LinkEvent::Resource(LinkResourcePacket {
                     packet_type: packet.header.packet_type,
@@ -301,6 +335,7 @@ impl Link {
                     payload: LinkPayload::new_from_slice(packet.data.as_slice()),
                 }));
             }
+            // Resource management packets ARE encrypted at the link level
             PacketContext::ResourceAdvrtisement
             | PacketContext::ResourceRequest
             | PacketContext::ResourceHashUpdate
