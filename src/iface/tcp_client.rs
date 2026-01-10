@@ -114,7 +114,7 @@ impl TcpClient {
                                             // TCP stream may contain several or partial HDLC frames
                                             for i in 0..n {
                                                 // Push new byte from the end of buffer
-                                                rx_buffer[BUFFER_SIZE-1] = tcp_buffer[i];
+                                                rx_buffer[rx_buffer.len()-1] = tcp_buffer[i];
 
                                                 // Check if it is contains a HDLC frame
                                                 let frame = Hdlc::find(&rx_buffer[..]);
