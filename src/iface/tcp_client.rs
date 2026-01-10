@@ -180,6 +180,13 @@ impl TcpClient {
                             }
                             Some(message) = tx_channel.recv() => {
                                 let packet = message.packet;
+                                log::debug!(
+                                    "tcp_client: tx >> ({}) context={:?} dest={} type={:?}",
+                                    iface_address,
+                                    packet.context,
+                                    packet.destination,
+                                    packet.header.packet_type
+                                );
                                 if PACKET_TRACE {
                                     log::trace!("tcp_client: tx >> ({}) {}", iface_address, packet);
                                 }
@@ -189,9 +196,29 @@ impl TcpClient {
                                     let mut hdlc_output = OutputBuffer::new(&mut hdlc_tx_buffer[..]);
 
                                     if let Ok(_) = Hdlc::encode(output.as_slice(), &mut hdlc_output) {
-                                        let _ = stream.write_all(hdlc_output.as_slice()).await;
-                                        let _ = stream.flush().await;
+                                        match stream.write_all(hdlc_output.as_slice()).await {
+                                            Ok(_) => {
+                                                match stream.flush().await {
+                                                    Ok(_) => {
+                                                        log::debug!(
+                                                            "tcp_client: successfully sent {} bytes to wire",
+                                                            hdlc_output.as_slice().len()
+                                                        );
+                                                    }
+                                                    Err(e) => {
+                                                        log::error!("tcp_client: flush failed: {}", e);
+                                                    }
+                                                }
+                                            }
+                                            Err(e) => {
+                                                log::error!("tcp_client: write failed: {}", e);
+                                            }
+                                        }
+                                    } else {
+                                        log::error!("tcp_client: HDLC encode failed");
                                     }
+                                } else {
+                                    log::error!("tcp_client: packet serialization failed");
                                 }
                             }
                         };
