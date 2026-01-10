@@ -1031,6 +1031,9 @@ impl TransportHandler {
                 if packet.context == PacketContext::KeepAlive {
                     allow_duplicate = true;
                 }
+                if packet.context == PacketContext::Resource {
+                    allow_duplicate = true;
+                }
             }
             PacketType::Proof => {
                 if packet.context == PacketContext::LinkRequestProof {
