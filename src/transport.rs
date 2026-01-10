@@ -175,7 +175,7 @@ pub trait AnnounceHandler: Send + Sync {
     /// fn aspect_filter(&self) -> Option<&str> {
     ///     Some("delivery")  // This handler is interested in "delivery" aspect
     /// }
-    /// 
+    ///
     /// fn should_handle(&self, destination_hash: &AddressHash) -> bool {
     ///     // Implement custom filtering logic here if needed
     ///     true
@@ -775,7 +775,7 @@ impl TransportHandler {
                 original_packet.destination,
                 original_packet.context
             );
-            
+
             // Try incoming links first (we are the link receiver)
             if let Some(link) = self.in_links.get(&original_packet.destination) {
                 let link = link.lock().await;
@@ -806,8 +806,13 @@ impl TransportHandler {
                 // This should work because we have a path to the destination we linked to
             } else {
                 // Try link_table for remote/routed links
-                if let Some(original_dest) = self.link_table.original_destination(&original_packet.destination) {
-                    let (packet, maybe_iface) = self.path_table.handle_inbound_packet(&original_packet, Some(original_dest));
+                if let Some(original_dest) = self
+                    .link_table
+                    .original_destination(&original_packet.destination)
+                {
+                    let (packet, maybe_iface) = self
+                        .path_table
+                        .handle_inbound_packet(&original_packet, Some(original_dest));
                     if let Some(iface) = maybe_iface {
                         self.send(TxMessage {
                             tx_type: TxMessageType::Direct(iface),
@@ -1022,6 +1027,11 @@ impl TransportHandler {
                 // will decide whether to process duplicate requests
                 return true;
             }
+            PacketType::Data => {
+                if packet.context == PacketContext::KeepAlive {
+                    allow_duplicate = true;
+                }
+            }
             PacketType::Proof => {
                 if packet.context == PacketContext::LinkRequestProof {
                     if let Some(link) = self.in_links.get(&packet.destination) {
@@ -1173,7 +1183,7 @@ async fn handle_path_request<'a>(
     handler: &MutexGuard<'a, TransportHandler>,
 ) -> Option<Packet> {
     // Path request packet data format: destination_hash (16 bytes) + transport_id_hash (16 bytes) + request_tag (32 bytes)
-    
+
     let data = packet.data.as_slice();
     if data.len() < PATH_REQUEST_MIN_SIZE {
         log::debug!(
@@ -1225,9 +1235,9 @@ async fn handle_path_request<'a>(
             // Set the context to PathResponse
             // NOTE: Do NOT modify context_flag - it indicates ratchet presence, not path response
             announce_packet.context = PacketContext::PathResponse;
-            
+
             drop(destination); // Release the lock before returning
-            
+
             log::info!(
                 "tp({}): sending path response announce for {} with context {:?}",
                 handler.config.name,
@@ -1240,7 +1250,7 @@ async fn handle_path_request<'a>(
                 announce_packet.header.packet_type,
                 announce_packet.header.destination_type
             );
-            
+
             return Some(announce_packet);
         }
     } else {
@@ -1250,7 +1260,7 @@ async fn handle_path_request<'a>(
             requested_destination
         );
     }
-    
+
     None
 }
 
@@ -1264,14 +1274,16 @@ async fn handle_data<'a>(packet: &Packet, mut handler: MutexGuard<'a, TransportH
         let path_request_dest: PlainOutputDestination =
             PlainOutputDestination::new(EmptyIdentity::new(), path_request_name);
         let path_request_hash = path_request_dest.desc.address_hash;
-        
+
         if packet.destination == path_request_hash {
             if let Some(response_packet) = handle_path_request(packet, &handler).await {
                 // Send the path response announce
-                handler.send(TxMessage {
-                    tx_type: TxMessageType::Broadcast(None),
-                    packet: response_packet,
-                }).await;
+                handler
+                    .send(TxMessage {
+                        tx_type: TxMessageType::Broadcast(None),
+                        packet: response_packet,
+                    })
+                    .await;
             }
             return;
         }
@@ -1360,7 +1372,7 @@ async fn handle_announce<'a>(
         packet.context,
         packet.context == PacketContext::PathResponse
     );
-    
+
     if let Some(blocked_until) = handler.announce_limits.check(&packet.destination) {
         log::info!(
             "tp({}): too many announces from {}, blocked for {} seconds",
@@ -1384,7 +1396,7 @@ async fn handle_announce<'a>(
             handler.config.name,
             packet.destination
         );
-        
+
         let dest_hash = destination.desc.address_hash;
         let existing_destination = handler
             .single_out_destinations
@@ -1453,14 +1465,14 @@ async fn handle_announce<'a>(
             dest_hash,
             packet.context == PacketContext::PathResponse,
         );
-        
+
         let send_result = handler.announce_tx.send(AnnounceEvent {
             destination,
             app_data: PacketDataBuffer::new_from_slice(app_data),
             // Path responses are announces with PathResponse context
             is_path_response: packet.context == PacketContext::PathResponse,
         });
-        
+
         if let Err(_e) = send_result {
             log::debug!(
                 "tp({}): failed to send announce event (channel may have no receivers)",
@@ -1783,13 +1795,13 @@ async fn manage_transport(
                     Ok(announce_event) = announce_rx.recv() => {
                         let dest_hash = announce_event.destination.lock().await.desc.address_hash;
                         let handlers = announce_handlers.lock().await;
-                        
+
                         log::debug!(
                             "Announce event: dest={} is_path_response={}",
                             dest_hash,
                             announce_event.is_path_response,
                         );
-                        
+
                         for handler in handlers.iter() {
                             if !handler.receive_path_responses() && announce_event.is_path_response {
                                  continue;
