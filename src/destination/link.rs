@@ -146,6 +146,8 @@ pub struct Link {
     request_time: Instant,
     rtt: Duration,
     event_tx: tokio::sync::broadcast::Sender<LinkEventData>,
+    /// The interface this link communicates through (for incoming links)
+    origin_interface: Option<AddressHash>,
 }
 
 impl Link {
@@ -163,6 +165,7 @@ impl Link {
             request_time: Instant::now(),
             rtt: Duration::from_secs(0),
             event_tx,
+            origin_interface: None,
         }
     }
 
@@ -194,6 +197,7 @@ impl Link {
             request_time: Instant::now(),
             rtt: Duration::from_secs(0),
             event_tx,
+            origin_interface: None,  // Will be set by transport after creation
         };
 
         link.handshake(peer_identity);
@@ -551,6 +555,16 @@ impl Link {
 
     pub fn id(&self) -> &LinkId {
         &self.id
+    }
+
+    /// Set the origin interface for this link (used for incoming links)
+    pub fn set_origin_interface(&mut self, iface: AddressHash) {
+        self.origin_interface = Some(iface);
+    }
+
+    /// Get the origin interface for this link
+    pub fn origin_interface(&self) -> Option<AddressHash> {
+        self.origin_interface
     }
 }
 
