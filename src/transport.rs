@@ -770,13 +770,20 @@ impl TransportHandler {
     async fn send_packet(&mut self, original_packet: Packet) -> Option<PacketReceipt> {
         // Handle link-destined packets specially
         if original_packet.header.destination_type == DestinationType::Link {
+            log::debug!(
+                "send_packet: link packet detected - dest={} context={:?}",
+                original_packet.destination,
+                original_packet.context
+            );
+            
             // Try incoming links first (we are the link receiver)
             if let Some(link) = self.in_links.get(&original_packet.destination) {
                 let link = link.lock().await;
                 if let Some(iface) = link.origin_interface() {
                     log::trace!(
-                        "send_packet: routing link packet to {} via stored interface",
-                        original_packet.destination
+                        "send_packet: routing link packet to {} via stored interface {}",
+                        original_packet.destination,
+                        iface
                     );
                     self.send(TxMessage {
                         tx_type: TxMessageType::Direct(iface),
@@ -784,6 +791,11 @@ impl TransportHandler {
                     })
                     .await;
                     return None; // No receipt for link packets
+                } else {
+                    log::warn!(
+                        "send_packet: incoming link {} has no origin_interface set",
+                        original_packet.destination
+                    );
                 }
             }
 
