@@ -1018,7 +1018,7 @@ impl TransportHandler {
         // Resource packets should always pass through - they are sequential transfer parts
         // and should never be filtered as duplicates. This includes:
         // - Resource: Sequential data parts of the resource
-        // - ResourceAdvertisement: Initiates resource transfer
+        // - ResourceAdvrtisement: Initiates resource transfer
         // - ResourceRequest: Requests specific resource parts
         // - ResourceHashUpdate: Updates resource hashmap
         // - ResourceProof: Confirms resource completion
