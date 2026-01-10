@@ -179,14 +179,28 @@ impl ResourceManager {
         });
 
         if let Some(request_payload) = resource.next_request_payload() {
-            let packet = {
+            let (packet, link_id, origin_iface) = {
                 let link = self.link.lock().await;
-                link.encrypted_context_packet(
+                let link_id = *link.id();
+                let origin_iface = link.origin_interface();
+                log::info!(
+                    "ResourceRequest: creating packet for link {} (origin_interface: {:?})",
+                    link_id,
+                    origin_iface
+                );
+                let packet = link.encrypted_context_packet(
                     PacketContext::ResourceRequest,
                     PacketType::Data,
                     &request_payload,
-                )?
+                )?;
+                (packet, link_id, origin_iface)
             };
+            log::info!(
+                "ResourceRequest: sending packet - dest={} context={:?} origin_interface={:?}",
+                link_id,
+                packet.context,
+                origin_iface
+            );
             let _ = transport.send_packet(packet).await;
         }
 
