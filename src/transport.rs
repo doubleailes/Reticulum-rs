@@ -1015,6 +1015,27 @@ impl TransportHandler {
             return true;
         }
 
+        // Resource packets should always pass through - they are sequential transfer parts
+        // and should never be filtered as duplicates. This includes:
+        // - Resource: Sequential data parts of the resource
+        // - ResourceAdvertisement: Initiates resource transfer
+        // - ResourceRequest: Requests specific resource parts
+        // - ResourceHashUpdate: Updates resource hashmap
+        // - ResourceProof: Confirms resource completion
+        // - ResourceInitiatorCancel/ReceiverCancel: Cancel messages
+        if matches!(
+            packet.context,
+            PacketContext::Resource
+                | PacketContext::ResourceAdvrtisement
+                | PacketContext::ResourceRequest
+                | PacketContext::ResourceHashUpdate
+                | PacketContext::ResourceProof
+                | PacketContext::ResourceInitiatorCancel
+                | PacketContext::ResourceReceiverCancel
+        ) {
+            return true;
+        }
+
         let mut allow_duplicate = false;
 
         match packet.header.packet_type {
@@ -1031,9 +1052,6 @@ impl TransportHandler {
                 if packet.context == PacketContext::KeepAlive {
                     allow_duplicate = true;
                 }
-                if packet.context == PacketContext::Resource {
-                    allow_duplicate = true;
-                }
             }
             PacketType::Proof => {
                 if packet.context == PacketContext::LinkRequestProof {
@@ -1044,7 +1062,6 @@ impl TransportHandler {
                     }
                 }
             }
-            _ => {}
         }
 
         let is_new = self.packet_cache.lock().await.update(packet);
@@ -2275,6 +2292,148 @@ mod tests {
                 .filter_duplicate_packets(&keepalive_packet)
                 .await,
             "Duplicate KeepAlive should be allowed for Link packets"
+        );
+    }
+
+    #[tokio::test]
+    async fn resource_packets_not_filtered_as_duplicates() {
+        let transport = Transport::new(TransportConfig::default());
+        let handler = transport.get_handler();
+
+        let destination = AddressHash::new_from_rand(OsRng);
+
+        // Test all resource-related packet contexts
+        // These should ALL bypass duplicate filtering because they are sequential
+        // parts of a resource transfer
+        let resource_contexts = vec![
+            PacketContext::Resource,
+            PacketContext::ResourceAdvrtisement,
+            PacketContext::ResourceRequest,
+            PacketContext::ResourceHashUpdate,
+            PacketContext::ResourceProof,
+            PacketContext::ResourceInitiatorCancel,
+            PacketContext::ResourceReceiverCancel,
+        ];
+
+        for context in resource_contexts {
+            // Create a packet with the given resource context
+            let mut resource_packet: Packet = Default::default();
+            resource_packet.header.packet_type = PacketType::Data;
+            resource_packet.header.destination_type = DestinationType::Single;
+            resource_packet.destination = destination;
+            resource_packet.context = context;
+            resource_packet.data =
+                PacketDataBuffer::new_from_slice(format!("resource_{:?}", context).as_bytes());
+
+            // First packet should be allowed through
+            assert!(
+                handler
+                    .lock()
+                    .await
+                    .filter_duplicate_packets(&resource_packet)
+                    .await,
+                "First {:?} packet should be allowed",
+                context
+            );
+
+            // Duplicate should ALSO be allowed through
+            // This is the critical behavior - resource packets must never be filtered
+            let duplicate = resource_packet.clone();
+            assert!(
+                handler
+                    .lock()
+                    .await
+                    .filter_duplicate_packets(&duplicate)
+                    .await,
+                "Duplicate {:?} packet should be allowed (not filtered as duplicate)",
+                context
+            );
+
+            // Third identical packet should still be allowed
+            assert!(
+                handler
+                    .lock()
+                    .await
+                    .filter_duplicate_packets(&resource_packet)
+                    .await,
+                "Third {:?} packet should still be allowed",
+                context
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn resource_proof_packets_not_filtered_as_duplicates() {
+        let transport = Transport::new(TransportConfig::default());
+        let handler = transport.get_handler();
+
+        let destination = AddressHash::new_from_rand(OsRng);
+
+        // ResourceProof can also be sent as a Proof packet type (not just Data)
+        // Test this case separately
+        let mut proof_packet: Packet = Default::default();
+        proof_packet.header.packet_type = PacketType::Proof;
+        proof_packet.header.destination_type = DestinationType::Single;
+        proof_packet.destination = destination;
+        proof_packet.context = PacketContext::ResourceProof;
+        proof_packet.data = PacketDataBuffer::new_from_slice(b"resource_proof_data");
+
+        // First proof should be allowed
+        assert!(
+            handler
+                .lock()
+                .await
+                .filter_duplicate_packets(&proof_packet)
+                .await,
+            "First ResourceProof should be allowed"
+        );
+
+        // Duplicate proof should also be allowed
+        let duplicate_proof = proof_packet.clone();
+        assert!(
+            handler
+                .lock()
+                .await
+                .filter_duplicate_packets(&duplicate_proof)
+                .await,
+            "Duplicate ResourceProof should be allowed (not filtered)"
+        );
+    }
+
+    #[tokio::test]
+    async fn non_resource_data_packets_still_filtered() {
+        let transport = Transport::new(TransportConfig::default());
+        let handler = transport.get_handler();
+
+        let destination = AddressHash::new_from_rand(OsRng);
+
+        // Regular data packets (non-resource) should still be filtered as duplicates
+        let mut data_packet: Packet = Default::default();
+        data_packet.header.packet_type = PacketType::Data;
+        data_packet.header.destination_type = DestinationType::Single;
+        data_packet.destination = destination;
+        data_packet.context = PacketContext::None; // Regular data, not resource
+        data_packet.data = PacketDataBuffer::new_from_slice(b"regular_data");
+
+        // First packet should be allowed
+        assert!(
+            handler
+                .lock()
+                .await
+                .filter_duplicate_packets(&data_packet)
+                .await,
+            "First regular data packet should be allowed"
+        );
+
+        // Duplicate should be FILTERED (this is the difference from resource packets)
+        let duplicate = data_packet.clone();
+        assert!(
+            !handler
+                .lock()
+                .await
+                .filter_duplicate_packets(&duplicate)
+                .await,
+            "Duplicate regular data packet should be filtered"
         );
     }
 }
