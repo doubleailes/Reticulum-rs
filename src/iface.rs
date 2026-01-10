@@ -191,11 +191,28 @@ impl InterfaceManager {
 
                     should_send
                 }
-                TxMessageType::Direct(address) => address == iface.address,
+                TxMessageType::Direct(address) => {
+                    if address == iface.address {
+                        log::debug!(
+                            "iface: sending packet directly to interface {} (context: {:?})",
+                            iface.address,
+                            message.packet.context
+                        );
+                        true
+                    } else {
+                        false
+                    }
+                }
             };
 
             if should_send && !iface.stop.is_cancelled() {
-                let _ = iface.tx_send.send(message.clone()).await;
+                let send_result = iface.tx_send.send(message.clone()).await;
+                if let Err(_) = send_result {
+                    log::warn!(
+                        "iface: failed to send packet to interface {} (channel closed)",
+                        iface.address
+                    );
+                }
             }
         }
     }
