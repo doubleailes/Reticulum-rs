@@ -111,6 +111,7 @@ impl TcpClient {
                                             break;
                                         }
                                         Ok(n) => {
+                                            log::trace!("tcp_client: read {} bytes from TCP stream", n);
                                             // TCP stream may contain several or partial HDLC frames
                                             for i in 0..n {
                                                 // Push new byte from the end of buffer
@@ -124,6 +125,13 @@ impl TcpClient {
                                                     let mut output = OutputBuffer::new(&mut hdlc_rx_buffer[..]);
                                                     if let Ok(_) = Hdlc::decode(frame_buffer, &mut output) {
                                                         if let Ok(packet) = Packet::deserialize(&mut InputBuffer::new(output.as_slice())) {
+                                                            log::debug!(
+                                                                "tcp_client: rx << ({}) context={:?} dest={} type={:?}",
+                                                                iface_address,
+                                                                packet.context,
+                                                                packet.destination,
+                                                                packet.header.packet_type
+                                                            );
                                                             if PACKET_TRACE {
                                                                 log::trace!("tcp_client: rx << ({}) {}", iface_address, packet);
                                                             }
