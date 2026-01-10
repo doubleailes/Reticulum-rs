@@ -775,7 +775,7 @@ impl TransportHandler {
                 original_packet.destination,
                 original_packet.context
             );
-            
+
             // Try incoming links first (we are the link receiver)
             if let Some(link) = self.in_links.get(&original_packet.destination) {
                 let link = link.lock().await;
@@ -806,8 +806,13 @@ impl TransportHandler {
                 // This should work because we have a path to the destination we linked to
             } else {
                 // Try link_table for remote/routed links
-                if let Some(original_dest) = self.link_table.original_destination(&original_packet.destination) {
-                    let (packet, maybe_iface) = self.path_table.handle_inbound_packet(&original_packet, Some(original_dest));
+                if let Some(original_dest) = self
+                    .link_table
+                    .original_destination(&original_packet.destination)
+                {
+                    let (packet, maybe_iface) = self
+                        .path_table
+                        .handle_inbound_packet(&original_packet, Some(original_dest));
                     if let Some(iface) = maybe_iface {
                         self.send(TxMessage {
                             tx_type: TxMessageType::Direct(iface),
@@ -1021,6 +1026,11 @@ impl TransportHandler {
             }
             PacketType::Data => {
                 allow_duplicate = packet.context == PacketContext::KeepAlive;
+            }
+            PacketType::Data => {
+                if packet.context == PacketContext::KeepAlive {
+                    allow_duplicate = true;
+                }
             }
             PacketType::Proof => {
                 if packet.context == PacketContext::LinkRequestProof {
