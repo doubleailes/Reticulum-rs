@@ -40,9 +40,18 @@ sha2 = "0.10.8"
 rand_core = { version = "0.6.4", features = ["getrandom"] }
 
 # Async IO
-tokio = { version = "1.49.0", features = ["full"] }
-tokio-stream = "0.1.17"
-tokio-util = "0.7.15"
+tokio = { version = "1.49", features = [
+    "rt",
+    "net",
+    "io-util",
+    "sync",
+    "time",
+    "macros",
+    "rt-multi-thread",
+    "signals",
+] }
+tokio-stream = "0.1"
+tokio-util = "0.7"
 
 rmp = "0.8.14"
 rmp-serde = "1.3"

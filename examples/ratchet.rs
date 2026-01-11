@@ -51,10 +51,11 @@ async fn main() {
 
     let transport = Transport::new(TransportConfig::default());
 
-    let client_addr: AddressHash = transport.iface_manager().lock().await.spawn(
-        TcpClient::new("amsterdam.connect.reticulum.network:4965"),
-        TcpClient::spawn,
-    );
+    let client_addr: AddressHash = transport
+        .iface_manager()
+        .lock()
+        .await
+        .spawn(TcpClient::new("127.0.0.1:4242"), TcpClient::spawn);
     log::info!("TCP Client listening on {}", client_addr);
     let identity_path = "/tmp/client_identity";
     let _id = load_identity_from_file(identity_path).unwrap_or_else(|| {
